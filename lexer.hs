@@ -7,7 +7,7 @@ module Lexer
 import Numeric
 import Data.Char
 import Text.ParserCombinators.Parsec hiding (token, tokens)
-import Control.Applicative ((<*), (*>), (<$>), (<*>))
+import Control.Applicative ((<*), (*>), (<$>), (<*>), liftA2)
 
 data Token = ARRAY
            | IF
@@ -214,6 +214,14 @@ stringtok = parsePos string_
 
 -- end of string token
 
+comment :: Parser ()
+comment = do string "/*"
+             spaces
+             many (liftA2 const anychar spaces)
+             string "*/"
+             return ()
+        where anychar = (noneOf "*") >> (noneOf "/")
+
 other :: Parser TokenPos
 other = parsePos $ anyChar >> fail "Unrecognized char"
 
@@ -247,7 +255,13 @@ token = choice $ choices
                                  ]) ++ [other]
 
 tokens :: Parser [TokenPos]
-tokens = spaces *> many (token <* spaces)
+tokens = ignore *> many (token <* ignore)
+       where ignore = spaces <* (many comment)
+{-
+tokens = do spaces
+            content <- many (liftA2 const token spaces)
+            return content
+-}
 
 tokenize :: SourceName -> String -> Either ParseError [TokenPos]
 tokenize = runParser tokens ()
