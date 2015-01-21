@@ -198,7 +198,7 @@ strnonesc :: Parser Char
 strnonesc = noneOf "\\\""
 
 strchar :: Parser Char
-strchar = choice [ stresc
+strchar = choice [ try stresc
                  , try strhexesc
                  , try stroctesc
                  , strnonesc
@@ -218,33 +218,33 @@ other :: Parser TokenPos
 other = parsePos $ anyChar >> fail "Unrecognized char"
 
 token :: Parser TokenPos
-token = choice $ map try [ keywords
-               , identifier
-               , number
-               , stringtok
-               , assign
-               , comma
-               , colon
-               , semicolon
-               , lparen
-               , rparen
-               , lbrak
-               , rbrak
-               , lbrac
-               , rbrac
-               , dot
-               , plus
-               , minus
-               , Lexer.div
-               , leq
-               , lt
-               , geq
-               , gt
-               , eq
-               , ampersand
-               , bar
-               , other
-               ]
+token = choice $ choices 
+        where choices = (map try [ keywords
+                                 , identifier
+                                 , number
+                                 , stringtok
+                                 , assign
+                                 , comma
+                                 , colon
+                                 , semicolon
+                                 , lparen
+                                 , rparen
+                                 , lbrak
+                                 , rbrak
+                                 , lbrac
+                                 , rbrac
+                                 , dot
+                                 , plus
+                                 , minus
+                                 , Lexer.div
+                                 , leq
+                                 , lt
+                                 , geq
+                                 , gt
+                                 , eq
+                                 , ampersand
+                                 , bar
+                                 ]) ++ [other]
 
 tokens :: Parser [TokenPos]
 tokens = spaces *> many (token <* spaces)
