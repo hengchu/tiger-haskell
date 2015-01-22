@@ -267,7 +267,7 @@ leaveString (p, _, _, str) len = do
   s <- getLexerStringValue
   setLexerInString False
   setLexerStringValue ""
-  return (Token p (Str s) (Just (take len str)))
+  return (Token p (Str $ reverse s) (Just (take len str)))
 
 simpleToken :: TokenClass -> AlexInput -> Int -> Alex Token
 simpleToken t (p, _, _, str) len = return (Token p t (Just (take len str)))
