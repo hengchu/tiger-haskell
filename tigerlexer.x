@@ -79,7 +79,7 @@ rules:-
 <0>@identifier { getVariable }
 <0>@number     { getInteger  }
 
-<0>"\"" { enterNewString `andBegin` state_string }
+<0>\" { enterNewString `andBegin` state_string }
 <state_string> \\n                  { addCharToLexerString '\n' }
 <state_string> \\t                  { addCharToLexerString '\t' }
 <state_string> \\a                  { addCharToLexerString '\a' }
@@ -97,10 +97,10 @@ rules:-
 <state_string> \n                   { \_ _ -> lexerError "Illegal newline in string" }
 
 <0>"/*" { enterNewComment `andBegin` state_comment }
-<state_comment>"/*" { embedComment   }
-<state_comment>"*/" { unembedComment }
-<state_comment>.    ;
-<state_comment>\n   { skip }
+<state_comment>"/*"   { embedComment   }
+<state_comment>"*/"   { unembedComment }
+<state_comment>.      ;
+<state_comment>\n     { skip           }
 
 {
 
@@ -266,6 +266,7 @@ addCurrentCharToString i@(p, _, _, str) len = addCharToLexerString c i len
 leaveString (p, _, _, str) len = do
   s <- getLexerStringValue
   setLexerInString False
+  setLexerStringValue ""
   return (Token p (Str s) (Just (take len str)))
 
 simpleToken :: TokenClass -> AlexInput -> Int -> Alex Token
