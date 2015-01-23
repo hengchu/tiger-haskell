@@ -5,8 +5,9 @@
 -- Hengchu Zhang, 2015
 module TigerLexer
   (
-    Token
+    Token(..)
   , TokenClass(..)
+  , AlexPosn(..)
   , scanner
   ) where
 
