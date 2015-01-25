@@ -3,6 +3,8 @@ module TigerSymbol
     SymbolMap
   , Symbol
   , symbolMapFromStrings
+  , symbol
+  , name
   ) where
 
 import qualified Data.Map.Strict as Map
@@ -27,3 +29,11 @@ addString_ str m c = if str `Map.member` m
 
 symbolMapFromStrings :: [String] -> SymbolMap
 symbolMapFromStrings strs = fst $ execState (mapM addString strs) (Map.empty, 0)
+
+symbol :: String -> SymbolMap -> Maybe Symbol
+symbol str m = if str `Map.member` m
+                  then Just (str, fromJust (Map.lookup str m))
+                  else Nothing
+
+name :: Symbol -> String
+name (str, _) = str

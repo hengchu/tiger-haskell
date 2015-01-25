@@ -1,4 +1,4 @@
-module TigerAlexer
+module TigerAbsyn
   (
     Var(..)
   , Exp(..)
@@ -10,14 +10,20 @@ module TigerAlexer
   , Vardec(..)
   , Formals(..)
   , Fundec(..)
+  , Program(..)
   ) where
 
 import TigerLexer
 import qualified TigerSymbol as S
 
+data Program = Pexp Exp
+             | Pdecs [Dec]
+               deriving (Show, Eq)
+
 data Var = SimpleVar (S.Symbol, AlexPosn)
          | FieldVar (Var, S.Symbol, AlexPosn)
-         | SubscriptVar (Var, S.Symbol, AlexPosn)
+         | SubscriptVar (Var, Exp, AlexPosn)
+           deriving (Show, Eq)
 
 data Exp = VarExp Var
          | NilExp
@@ -34,6 +40,7 @@ data Exp = VarExp Var
          | BreakExp   { breakPos::AlexPosn                                                     }
          | LetExp     { letDecs::[Dec], letBody::Exp, letPos::AlexPosn                         }
          | ArrayExp   { arrayTyp::S.Symbol, arraySize::Exp, arrayInit::Exp, arrayPos::AlexPosn }
+           deriving (Show, Eq)
 
 data Dec = FunctionDec [Fundec]
          | VarDec { varDecVar::Vardec, 
@@ -41,18 +48,24 @@ data Dec = FunctionDec [Fundec]
                     varDecInit::Exp,
                     varDecPos::AlexPosn }
          | TypeDec { typeDecName::S.Symbol, typeDecTy::Ty, typeDecPos::AlexPosn }
+           deriving (Show, Eq)
 
 data Ty = NameTy (S.Symbol, AlexPosn)
         | RecordTy [Tfield]
         | ArrayTy (S.Symbol, AlexPosn)
+           deriving (Show, Eq)
 
 data Oper = PlusOp | MinusOp | TimesOp | DivideOp
           | EqOp   | NeqOp   | LtOp    | LeOp | GtOp | GeOp
+            deriving (Show, Eq)
 
 type Efield  = (S.Symbol, Exp, AlexPosn)
 data Tfield  = Tfield  { tfieldName::S.Symbol, tfieldTyp::S.Symbol, tfieldPos::AlexPosn }
+                 deriving (Show, Eq)
 data Vardec  = Vardec  { vardecName::S.Symbol, vardecEscape::Bool }
+                 deriving (Show, Eq)
 data Formals = Formals { formalsVar::Vardec, formalsType::S.Symbol, formalsPos::AlexPosn }
+                 deriving (Show, Eq)
 data Fundec  = Fundec  { 
                          fundecName::S.Symbol
                        , fundecParams::[Formals]
@@ -60,3 +73,4 @@ data Fundec  = Fundec  {
                        , fundecBody::Exp
                        , fundecPos::AlexPosn 
                        }
+                 deriving (Show, Eq)
