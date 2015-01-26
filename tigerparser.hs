@@ -69,30 +69,37 @@ parse tokens =
               acceptTok _                           = Nothing
 
       parseExpTerm :: TigParsec (TAbsyn.Exp, TLex.AlexPosn)
-      parseExpTerm = try parseAssignExp
-                 <|> try parseVarExp
+      parseExpTerm = try parseSeqExps
+                 <|> try parseLetExp
                  <|> try parseArrCreation
                  <|> try parseRecCreation
+                 <|> try parseAssignExp
+                 <|> try parseVarExp
+                 <|> try parseWhileExp
+                 <|> try parseBreakExp
+                 <|> try parseForExp
+                 <|> try parseStr
                  <|> try parseNum 
                  <|> try parseNil
+                 <|> (try $ between (pSimpleToken TLex.LPAREN) (pSimpleToken TLex.RPAREN) (expr))
                  <?> "Expression"
 
-      parseNum = do (PToken pos _, num) <- try pNumber
+      parseNum = do (PToken pos _, num) <- pNumber
                     return (TAbsyn.IntExp num, pos)
 
-      parseNil = do (PToken pos _) <- try (pSimpleToken TLex.NIL)
+      parseNil = do (PToken pos _) <- (pSimpleToken TLex.NIL)
                     return (TAbsyn.NilExp, pos)
 
-      parseStr = do (PToken pos _, str) <- try pString
+      parseStr = do (PToken pos _, str) <- pString
                     return (TAbsyn.StringExp (str, pos), pos)
 
-      parseTypeId = do (PToken pos _, str) <- try pId
+      parseTypeId = do (PToken pos _, str) <- pId
                        return (psymbol str, pos)
 
       parseSimpleId = parseTypeId
 
-      parseArrCreation = do (s, spos) <- try parseTypeId
-                            (sze, epos) <- try $ between (pSimpleToken TLex.LBRAK) (pSimpleToken TLex.RBRAK) expr
+      parseArrCreation = do (s, spos) <- parseTypeId
+                            (sze, epos) <- between (pSimpleToken TLex.LBRAK) (pSimpleToken TLex.RBRAK) expr
                             _ <- pSimpleToken TLex.OF
                             (inite, epos') <- expr
                             return $ (TAbsyn.ArrayExp { TAbsyn.arrayTyp = s
@@ -100,16 +107,16 @@ parse tokens =
                                                       , TAbsyn.arrayInit = inite
                                                       , TAbsyn.arrayPos = spos }, spos)
 
-      parseRecCreation = do (s, spos) <- try parseTypeId
-                            (efields, epos) <- try $ between (pSimpleToken TLex.LBRAC) 
-                                                             (pSimpleToken TLex.RBRAC) 
-                                                             parseEfields
+      parseRecCreation = do (s, spos) <- parseTypeId
+                            (efields, epos) <- between (pSimpleToken TLex.LBRAC) 
+                                                       (pSimpleToken TLex.RBRAC) 
+                                                       parseEfields
                             return $ (TAbsyn.RecordExp { TAbsyn.recordFields = efields
                                                        , TAbsyn.recordTyp = s
                                                        , TAbsyn.recordPos = spos }, spos)
                          where parseEfields = do fieldsAndPos <- parseEfield `sepBy` (pSimpleToken TLex.COMMA) 
                                                  return (map fst fieldsAndPos, snd $ head fieldsAndPos)
-                               parseEfield  = do (s, spos) <- try parseTypeId
+                               parseEfield  = do (s, spos) <- parseTypeId
                                                  _ <- pSimpleToken TLex.EQ
                                                  (e, epos) <- expr
                                                  return ((s, e, epos), epos)
@@ -148,6 +155,107 @@ parse tokens =
                                                    , TAbsyn.assignExp=e
                                                    , TAbsyn.assignPos=vpos
                                                    }, vpos)
+
+      parseWhileExp = do _ <- pSimpleToken TLex.WHILE
+                         (e1, pos1) <- expr
+                         _ <- pSimpleToken TLex.DO
+                         (e2, pos2) <- expr
+                         return $ (TAbsyn.WhileExp { TAbsyn.whileTest = e1
+                                                   , TAbsyn.whileBody = e2
+                                                   , TAbsyn.whilePos  = pos1
+                                                   }, pos1)
+
+      parseForExp = do _ <- pSimpleToken TLex.FOR
+                       (s, spos) <- parseSimpleId
+                       _ <- pSimpleToken TLex.ASSIGN
+                       (lowe, lowepos) <- expr
+                       _ <- pSimpleToken TLex.TO
+                       (highe, highepos) <- expr
+                       _ <- pSimpleToken TLex.DO
+                       (e, epos) <- expr
+                       return $ (TAbsyn.ForExp { TAbsyn.forVar  = TAbsyn.Vardec {TAbsyn.vardecName = s, TAbsyn.vardecEscape = False}
+                                               , TAbsyn.forLo   = lowe
+                                               , TAbsyn.forHi   = highe
+                                               , TAbsyn.forBody = e
+                                               , TAbsyn.forPos  = spos
+                                               }, spos)
+
+      parseLetExp = do PToken letpos _ <- pSimpleToken TLex.LET
+                       ds <- parseDecs
+                       pSimpleToken TLex.IN
+                       es <- expr `sepBy` (pSimpleToken TLex.SEMICOLON)
+                       pSimpleToken TLex.END
+                       return $ (TAbsyn.LetExp { TAbsyn.letDecs=ds
+                                               , TAbsyn.letBody=TAbsyn.SeqExp (es)
+                                               , TAbsyn.letPos=letpos }, letpos)
+
+      parseDecs = many parseDec
+
+      parseDec = try parseVardec 
+                 <|> try parseFundec 
+                 <|> try parseTypeDeclaration 
+                 <?> "dec"
+                 where parseFundec = do PToken fundecpos _ <- pSimpleToken TLex.FUNCTION
+                                        (id, idpos) <- parseSimpleId
+                                        tfields <- between (pSimpleToken TLex.LPAREN)
+                                                           (pSimpleToken TLex.RPAREN)
+                                                           parseTyfields
+                                        maybetypeid <- optionMaybe (pSimpleToken TLex.COLON >> parseTypeId)
+                                        pSimpleToken TLex.EQ
+                                        (e, epos) <- expr
+                                        return $ TAbsyn.FunctionDec { TAbsyn.fundecName=id
+                                                                    , TAbsyn.fundecParams=tfields
+                                                                    , TAbsyn.fundecResult=maybetypeid
+                                                                    , TAbsyn.fundecBody=e
+                                                                    , TAbsyn.fundecPos=fundecpos }
+                       parseTypeDeclaration = do PToken tdecpos _ <- pSimpleToken TLex.TYPE
+                                                 (id, idpos) <- parseSimpleId
+                                                 pSimpleToken TLex.EQ
+                                                 (ty, typos) <- parseTy
+                                                 return $ TAbsyn.TypeDec { TAbsyn.typeDecName=id
+                                                                         , TAbsyn.typeDecTy=ty
+                                                                         , TAbsyn.typeDecPos=tdecpos }
+                                              
+
+      parseVardec = do PToken varpos _ <- pSimpleToken TLex.VAR
+                       (s, spos) <- parseSimpleId
+                       maybetypeid <- optionMaybe (pSimpleToken TLex.COLON >> parseTypeId)
+                       pSimpleToken TLex.ASSIGN
+                       (e, epos) <- expr
+                       let vardec = TAbsyn.Vardec{TAbsyn.vardecName=s, TAbsyn.vardecEscape=False}
+                       return $ case maybetypeid of
+                                  Nothing -> TAbsyn.VarDec { TAbsyn.varDecVar=vardec
+                                                           , TAbsyn.varDecTyp=Nothing
+                                                           , TAbsyn.varDecInit=e
+                                                           , TAbsyn.varDecPos=varpos }
+                                  Just (t, tpos) -> TAbsyn.VarDec { TAbsyn.varDecVar=vardec
+                                                                  , TAbsyn.varDecTyp=Just (t, tpos)
+                                                                  , TAbsyn.varDecInit=e
+                                                                  , TAbsyn.varDecPos=varpos }
+
+      parseTy = try parseRecordDef <|> try parseArrayDefinition <|> parseTypeIdDefinition <?> "types"
+                where parseRecordDef = do PToken lbracpos _ <- pSimpleToken TLex.LBRAC
+                                          tfields <- parseTyfields
+                                          pSimpleToken TLex.RBRAC
+                                          return (TAbsyn.RecordTy tfields, lbracpos)
+                      parseArrayDefinition = do PToken arrpos _ <- pSimpleToken TLex.ARRAY
+                                                pSimpleToken TLex.OF
+                                                (s, spos) <- parseTypeId
+                                                return (TAbsyn.ArrayTy(s, arrpos), arrpos)
+                      parseTypeIdDefinition = do (s, spos) <- parseTypeId
+                                                 return (TAbsyn.NameTy(s, spos), spos)
+
+      parseTyfields = parseTyfield `sepBy` (pSimpleToken TLex.COMMA)
+
+      parseTyfield = do (s, spos) <- parseSimpleId
+                        _ <- pSimpleToken TLex.COLON
+                        (t, tpos) <- parseTypeId
+                        return $ TAbsyn.Tfield { TAbsyn.tfieldName = s
+                                               , TAbsyn.tfieldTyp  = t
+                                               , TAbsyn.tfieldPos  = spos }
+
+      parseBreakExp = do PToken pos _ <- pSimpleToken TLex.BREAK
+                         return (TAbsyn.BreakExp { TAbsyn.breakPos = pos }, pos)
       
       table = [
                 [ prefix (pSimpleToken TLex.MINUS)  negateOp ]
@@ -172,14 +280,25 @@ parse tokens =
       postFix pOp fun       = Postfix (try $ do { pOp<?>"postfix operator"; return fun })
       binary  pOp fun assoc = Infix   (try $ do { pOp<?>"binary operator"; return fun }) assoc
 
+      parseSeqExps = do es <- between (pSimpleToken TLex.LPAREN) (pSimpleToken TLex.RPAREN) $ expr `sepBy` (pSimpleToken TLex.SEMICOLON)
+                        return $ case es of
+                                      [] -> (TAbsyn.SeqExp([]), TLex.AlexPn 0 0 0)
+                                      (_, epos):_ -> (TAbsyn.SeqExp(es), epos)
+
       expr = buildExpressionParser table parseExpTerm
 
       expr' = do (e, pos) <- expr <?> "Expression"
                  pSimpleToken TLex.EOF
-                 return (e, pos)
+                 return (TAbsyn.Pexp e)
+
+      decs = do ds <- parseDecs
+                pSimpleToken TLex.EOF
+                return (TAbsyn.Pdecs ds)
+  
+      program = try expr' <|> try decs <?> "program"
 
     in
 
-      case (Text.Parsec.parse expr' "INPUT" ptokens) of
+      case (Text.Parsec.parse program "INPUT" ptokens) of
         Left err -> Left err
-        Right (e,p) -> Right $ TAbsyn.Pexp e
+        Right p -> Right p
