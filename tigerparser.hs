@@ -74,7 +74,9 @@ parse tokens =
                  <|> try parseArrCreation
                  <|> try parseRecCreation
                  <|> try parseAssignExp
+                 <|> try parseFunctionCall
                  <|> try parseVarExp
+                 <|> try parseIfExp
                  <|> try parseWhileExp
                  <|> try parseBreakExp
                  <|> try parseForExp
@@ -97,6 +99,13 @@ parse tokens =
                        return (psymbol str, pos)
 
       parseSimpleId = parseTypeId
+
+      parseFunctionCall = do (s, pos) <- parseSimpleId
+                             es <- between (pSimpleToken TLex.LPAREN) (pSimpleToken TLex.RPAREN)
+                                           (expr `sepBy` (pSimpleToken TLex.COMMA))
+                             return (TAbsyn.AppExp { TAbsyn.appFunc=s
+                                                   , TAbsyn.appArgs=(map fst es)
+                                                   , TAbsyn.appPos=pos }, pos)
 
       parseArrCreation = do (s, spos) <- parseTypeId
                             (sze, epos) <- between (pSimpleToken TLex.LBRAK) (pSimpleToken TLex.RBRAK) expr
@@ -155,6 +164,19 @@ parse tokens =
                                                    , TAbsyn.assignExp=e
                                                    , TAbsyn.assignPos=vpos
                                                    }, vpos)
+
+      parseIfExp = do PToken pos _ <- pSimpleToken TLex.IF
+                      (teste, _) <- expr
+                      _ <- pSimpleToken TLex.THEN
+                      (thene, _) <- expr
+                      maybeelse <- optionMaybe parseElse
+                      return (TAbsyn.IfExp { TAbsyn.ifTest=teste
+                                           , TAbsyn.ifThen=thene
+                                           , TAbsyn.ifElse= (case maybeelse of Nothing -> Nothing 
+                                                                               Just (elsee, _) -> Just (elsee))
+                                           , TAbsyn.ifPos=pos}, pos)
+                   where parseElse = do _ <- pSimpleToken TLex.ELSE
+                                        expr
 
       parseWhileExp = do _ <- pSimpleToken TLex.WHILE
                          (e1, pos1) <- expr
@@ -263,6 +285,12 @@ parse tokens =
                 , binary (pSimpleToken TLex.DIV)   (binaryOp TAbsyn.DivideOp) AssocLeft ]
               , [ binary (pSimpleToken TLex.PLUS)  (binaryOp TAbsyn.PlusOp) AssocLeft
                 , binary (pSimpleToken TLex.MINUS) (binaryOp TAbsyn.MinusOp) AssocLeft ]
+              , [ binary (pSimpleToken TLex.GEQ)   (binaryOp TAbsyn.GeOp) AssocNone
+                , binary (pSimpleToken TLex.LEQ)   (binaryOp TAbsyn.LeOp) AssocNone
+                , binary (pSimpleToken TLex.EQ)    (binaryOp TAbsyn.EqOp) AssocNone
+                , binary (pSimpleToken TLex.NEQ)   (binaryOp TAbsyn.NeqOp) AssocNone
+                , binary (pSimpleToken TLex.LT)    (binaryOp TAbsyn.LtOp) AssocNone
+                , binary (pSimpleToken TLex.GT)    (binaryOp TAbsyn.GtOp) AssocNone ]
               ]
 
       negateOp (a, pos) = (TAbsyn.OpExp { TAbsyn.opLeft  = TAbsyn.IntExp 0
