@@ -8,6 +8,7 @@ module TigerAbsyn
   , Efield
   , Tfield(..)
   , Vardec(..)
+  , Fundec(..)
   , Formals(..)
   , Program(..)
   ) where
@@ -41,13 +42,7 @@ data Exp = VarExp Var
          | ArrayExp   { arrayTyp::S.Symbol, arraySize::Exp, arrayInit::Exp, arrayPos::AlexPosn }
            deriving (Show, Eq)
 
-data Dec = FunctionDec { 
-                         fundecName::S.Symbol
-                       , fundecParams::[Tfield]
-                       , fundecResult::Maybe(S.Symbol, AlexPosn)
-                       , fundecBody::Exp
-                       , fundecPos::AlexPosn 
-                       }
+data Dec = FunctionDec [Fundec]
          | VarDec { varDecVar::Vardec, 
                     varDecTyp::Maybe (S.Symbol, AlexPosn), 
                     varDecInit::Exp,
@@ -62,6 +57,7 @@ data Ty = NameTy (S.Symbol, AlexPosn)
 
 data Oper = PlusOp | MinusOp | TimesOp | DivideOp
           | EqOp   | NeqOp   | LtOp    | LeOp | GtOp | GeOp
+          | AndOp  | OrOp
             deriving (Show, Eq)
 
 type Efield  = (S.Symbol, Exp, AlexPosn)
@@ -71,3 +67,11 @@ data Vardec  = Vardec  { vardecName::S.Symbol, vardecEscape::Bool }
                  deriving (Show, Eq)
 data Formals = Formals { formalsVar::Vardec, formalsType::S.Symbol, formalsPos::AlexPosn }
                  deriving (Show, Eq)
+data Fundec = Fundec { 
+                       fundecName::S.Symbol
+                     , fundecParams::[Tfield]
+                     , fundecResult::Maybe(S.Symbol, AlexPosn)
+                     , fundecBody::Exp
+                     , fundecPos::AlexPosn 
+                     }
+              deriving (Show, Eq)

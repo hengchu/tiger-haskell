@@ -214,7 +214,7 @@ parse tokens =
       parseDecs = many parseDec
 
       parseDec = try parseVardec 
-                 <|> try parseFundec 
+                 <|> try parseFundecs
                  <|> try parseTypeDeclaration 
                  <?> "dec"
                  where parseFundec = do PToken fundecpos _ <- pSimpleToken TLex.FUNCTION
@@ -225,11 +225,13 @@ parse tokens =
                                         maybetypeid <- optionMaybe (pSimpleToken TLex.COLON >> parseTypeId)
                                         pSimpleToken TLex.EQ
                                         (e, epos) <- expr
-                                        return $ TAbsyn.FunctionDec { TAbsyn.fundecName=id
-                                                                    , TAbsyn.fundecParams=tfields
-                                                                    , TAbsyn.fundecResult=maybetypeid
-                                                                    , TAbsyn.fundecBody=e
-                                                                    , TAbsyn.fundecPos=fundecpos }
+                                        return $ TAbsyn.Fundec { TAbsyn.fundecName=id
+                                                               , TAbsyn.fundecParams=tfields
+                                                               , TAbsyn.fundecResult=maybetypeid
+                                                               , TAbsyn.fundecBody=e
+                                                               , TAbsyn.fundecPos=fundecpos }
+                       parseFundecs = do fds <- many1 parseFundec
+                                         return $ TAbsyn.FunctionDec fds
                        parseTypeDeclaration = do PToken tdecpos _ <- pSimpleToken TLex.TYPE
                                                  (id, idpos) <- parseSimpleId
                                                  pSimpleToken TLex.EQ
@@ -291,6 +293,8 @@ parse tokens =
                 , binary (pSimpleToken TLex.NEQ)   (binaryOp TAbsyn.NeqOp) AssocNone
                 , binary (pSimpleToken TLex.LT)    (binaryOp TAbsyn.LtOp) AssocNone
                 , binary (pSimpleToken TLex.GT)    (binaryOp TAbsyn.GtOp) AssocNone ]
+              , [ binary (pSimpleToken TLex.AMPERSAND) (binaryOp TAbsyn.AndOp) AssocLeft ]
+              , [ binary (pSimpleToken TLex.BAR)   (binaryOp TAbsyn.OrOp) AssocLeft ]
               ]
 
       negateOp (a, pos) = (TAbsyn.OpExp { TAbsyn.opLeft  = TAbsyn.IntExp 0
