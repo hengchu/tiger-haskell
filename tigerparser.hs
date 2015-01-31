@@ -21,7 +21,7 @@ data PToken = PToken TLex.AlexPosn TLex.TokenClass
 data LvalueTail = Dot (S.Symbol, TLex.AlexPosn)
                 | Bracket (TAbsyn.Exp, TLex.AlexPosn)
 
-parse :: [TLex.Token] -> Either ParseError TAbsyn.Program
+parse :: [TLex.Token] -> Either ParseError (TAbsyn.Program, S.SymbolMap)
 parse tokens =
     let
 
@@ -333,4 +333,4 @@ parse tokens =
 
       case (Text.Parsec.parse program "INPUT" ptokens) of
         Left err -> Left err
-        Right p -> Right p
+        Right p -> Right (p, symbolmap)

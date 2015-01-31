@@ -5,6 +5,7 @@ module TigerSementTypes
        ) where
 
 import qualified TigerSymbol as S
+import Data.IORef
 
 type Uniq = Integer
 data Ty = Record ([(S.Symbol, Ty)], Uniq)
@@ -12,6 +13,15 @@ data Ty = Record ([(S.Symbol, Ty)], Uniq)
         | INT
         | String
         | Array (Ty, Uniq)
-        | Name (S.Symbol, Maybe Ty)
+        | Name (S.Symbol, IORef (Maybe Ty))
         | Unit
-        deriving (Show, Eq)
+        deriving (Eq)
+
+instance Show Ty where
+  show (Record (xs, u)) = "Record: (" ++ show xs ++ " )"
+  show Nil = "Nil"
+  show INT = "INT"
+  show String = "String"
+  show (Array(t, u)) = "Array: (" ++ show t ++ "[])"
+  show (Name(s, ref)) = "Name: (" ++ show s ++ ", <ioref>)"
+  show Unit = "Unit"

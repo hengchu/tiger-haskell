@@ -11,4 +11,4 @@ main = do args <- getArgs
             Left lexError -> print lexError
             Right tokens -> (print res) >> (case TigerParser.parse tokens of
                                Left parseError -> print parseError
-                               Right pg -> print pg)
+                               Right (pg, _) -> print pg)
