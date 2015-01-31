@@ -215,7 +215,7 @@ parse tokens =
 
       parseDec = try parseVardec 
                  <|> try parseFundecs
-                 <|> try parseTypeDeclaration 
+                 <|> try parseTypedecs 
                  <?> "dec"
                  where parseFundec = do PToken fundecpos _ <- pSimpleToken TLex.FUNCTION
                                         (id, idpos) <- parseSimpleId
@@ -232,13 +232,15 @@ parse tokens =
                                                                , TAbsyn.fundecPos=fundecpos }
                        parseFundecs = do fds <- many1 parseFundec
                                          return $ TAbsyn.FunctionDec fds
+                       parseTypedecs = do tys <- many1 parseTypeDeclaration
+                                          return $ TAbsyn.TypeDec tys
                        parseTypeDeclaration = do PToken tdecpos _ <- pSimpleToken TLex.TYPE
                                                  (id, idpos) <- parseSimpleId
                                                  pSimpleToken TLex.EQ
                                                  (ty, typos) <- parseTy
-                                                 return $ TAbsyn.TypeDec { TAbsyn.typeDecName=id
-                                                                         , TAbsyn.typeDecTy=ty
-                                                                         , TAbsyn.typeDecPos=tdecpos }
+                                                 return $ TAbsyn.Typedec { TAbsyn.typedecName=id
+                                                                         , TAbsyn.typedecTy=ty
+                                                                         , TAbsyn.typedecPos=tdecpos }
                                               
 
       parseVardec = do PToken varpos _ <- pSimpleToken TLex.VAR

@@ -4,6 +4,7 @@ module TigerAbsyn
   , Exp(..)
   , Dec(..)
   , Ty(..)
+  , Typedec(..)
   , Oper(..)
   , Efield
   , Tfield(..)
@@ -47,7 +48,7 @@ data Dec = FunctionDec [Fundec]
                     varDecTyp::Maybe (S.Symbol, AlexPosn), 
                     varDecInit::Exp,
                     varDecPos::AlexPosn }
-         | TypeDec { typeDecName::S.Symbol, typeDecTy::Ty, typeDecPos::AlexPosn }
+         | TypeDec [Typedec]
            deriving (Show, Eq)
 
 data Ty = NameTy (S.Symbol, AlexPosn)
@@ -66,6 +67,8 @@ data Tfield  = Tfield  { tfieldName::S.Symbol, tfieldTyp::S.Symbol, tfieldPos::A
 data Vardec  = Vardec  { vardecName::S.Symbol, vardecEscape::Bool }
                  deriving (Show, Eq)
 data Formals = Formals { formalsVar::Vardec, formalsType::S.Symbol, formalsPos::AlexPosn }
+                 deriving (Show, Eq)
+data Typedec = Typedec { typedecName::S.Symbol, typedecTy::Ty, typedecPos::AlexPosn }
                  deriving (Show, Eq)
 data Fundec = Fundec { 
                        fundecName::S.Symbol

@@ -32,43 +32,46 @@ instance Error SementError where
   noMsg    = SE(TLex.AlexPn 0 0 0, "Unknown error")
   strMsg s = SE(TLex.AlexPn 0 0 0, s)
 
-binOpNonMatchingError   = "Binary operation on non-matching types"
-binNilOp                = "Binary operation on two nil types"
-binUnitOp               = "Binary operation on two unit types"
-arrayRecOrderOp         = "Order comparison operation on array or record type"
-undefinedFuncError name = "Calling undefined function: " ++ name
-undefinedRecError  name = "Creating undefined record type: " ++ name
-recSymbolMisMatch       = "Symbol mismatch when creating record"
-recTypeMisMatch         = "Type mismatch when creating record"
-illegalRecType name     = "Attempting to create record with non-record type: " ++ name
-assignmentTypeMismatch  = "Attempting to assign mismatching type to variable"
-illegalIfTestType       = "If expression has non-int test type"
-ifthenTypeMismatch      = "If expression then branch and else branch have different types"
-illegalWhileTestType    = "While expression has non-int test type"
-whileLoopBodyUnit       = "While expression should have unit typed body"
-forLoopBoundaryType     = "For loop has non-int low or high type"
-forLoopBodyUnit         = "For loop should have unit typed body"
-breakExpNotInLoop       = "Break expression not in any loop"
-undefinedArrError name  = "Creating array for undefined type: " ++ name
-nonarrayCreation  name  = "Attempting to create array for non-array type: " ++ name
-arrayInitMismatch       = "Array initialization expression does not match actual type"
-arraySizeNotInt         = "Array size expression is not int-typed"
-undefinedFuncRetType name = "Undefined function return type: " ++ name
-undefinedFuncParamType  = "Undefined function parameter type(s)"
-procedureHasNonUnitRetType name = "Procedure: " ++ name ++ " has non-unit return type"
-functionRetBodyTypeMismatch name = "Function: " ++ name ++ " return type does not match body expression type"
-undefinedVarDecType name = "Declared variable type: " ++ name ++ " is not defined"
-variableInitDeclaredTypeMismatch name = "Variable: " ++ name ++ " init expression type does not match declared type"
-undefinedTypeInNameTy name = "Undefined type: " ++ name ++ " in name type declaration"
-undefinedTypeInArrayTy name = "Undefined type: " ++ name ++ " in array type declaration"
-undefinedTypeInRecordTy name = "Undefined type: " ++ name ++ " in record type declaration"
-variableUndefined name = "Variable is not in scope: " ++ name
-nameIsNotVariable name = name ++ " is not a variable"
-fieldVarOnNonRecordType name = "Trying to access field: " ++ name ++ " on non record type"
-recordTypeHasNoField name = "Record type does not have field: " ++ name
-subscriptVarOnNonArrayType = "Trying to subscript non-array type"
-subscriptIsNotIntType = "Subscript is not int-typed"
-circularType = "Circular type discovered!"
+binOpNonMatchingError                   = "Binary operation on non-matching types"
+binNilOp                                = "Binary operation on two nil types"
+binUnitOp                               = "Binary operation on two unit types"
+arrayRecOrderOp                         = "Order comparison operation on array or record type"
+undefinedFuncError name                 = "Calling undefined function: " ++ name
+undefinedRecError  name                 = "Creating undefined record type: " ++ name
+recSymbolMisMatch                       = "Symbol mismatch when creating record"
+recTypeMisMatch                         = "Type mismatch when creating record"
+illegalRecType name                     = "Attempting to create record with non-record type: " ++ name
+assignmentTypeMismatch                  = "Attempting to assign mismatching type to variable"
+illegalIfTestType                       = "If expression has non-int test type"
+ifthenTypeMismatch                      = "If expression then branch and else branch have different types"
+illegalWhileTestType                    = "While expression has non-int test type"
+whileLoopBodyUnit                       = "While expression should have unit typed body"
+forLoopBoundaryType                     = "For loop has non-int low or high type"
+forLoopBodyUnit                         = "For loop should have unit typed body"
+breakExpNotInLoop                       = "Break expression not in any loop"
+undefinedArrError name                  = "Creating array for undefined type: " ++ name
+nonarrayCreation  name                  = "Attempting to create array for non-array type: " ++ name
+arrayInitMismatch                       = "Array initialization expression does not match actual type"
+arraySizeNotInt                         = "Array size expression is not int-typed"
+undefinedFuncRetType name               = "Undefined function return type: " ++ name
+undefinedFuncParamType                  = "Undefined function parameter type(s)"
+procedureHasNonUnitRetType name         = "Procedure: " ++ name ++ " has non-unit return type"
+functionRetBodyTypeMismatch name        = "Function: " ++ name ++ " return type does not match body expression type"
+undefinedVarDecType name                = "Declared variable type: " ++ name ++ " is not defined"
+variableInitDeclaredTypeMismatch name   = "Variable: " ++ name ++ " init expression type does not match declared type"
+undefinedTypeInNameTy name              = "Undefined type: " ++ name ++ " in name type declaration"
+undefinedTypeInArrayTy name             = "Undefined type: " ++ name ++ " in array type declaration"
+undefinedTypeInRecordTy name            = "Undefined type: " ++ name ++ " in record type declaration"
+variableUndefined name                  = "Variable is not in scope: " ++ name
+nameIsNotVariable name                  = name ++ " is not a variable"
+fieldVarOnNonRecordType name            = "Trying to access field: " ++ name ++ " on non record type"
+recordTypeHasNoField name               = "Record type does not have field: " ++ name
+subscriptVarOnNonArrayType              = "Trying to subscript non-array type"
+subscriptIsNotIntType                   = "Subscript is not int-typed"
+circularType                            = "Circular type discovered!"
+redefiningType name                     = "Redefining type: " ++ name
+variableIsNotFunction name              = "Variable is not function: " ++ name
+parameterTypesDoesNotMatchFunctionTypes = "Parameter types does not match function declared types"
 
 -- Generates a new value of Uniq type
 genUnique :: SementState TigSTy.Uniq
@@ -171,9 +174,13 @@ transExp (TAbsyn.SeqExp []) = error "Impossible SeqExp case"
 -- Function application
 transExp TAbsyn.AppExp{TAbsyn.appFunc=funcsymbol, TAbsyn.appArgs=es, TAbsyn.appPos=pos}
   = do (venv, _, _, _) <- get
-       if funcsymbol `Map.member` venv
-          then do {tys <- mapM transExp es; return $ last tys}
-          else throwError $ SE(pos, undefinedFuncError $ TSym.name funcsymbol) 
+       case Map.lookup funcsymbol venv of
+          Just (FunEntry{funFormals=formaltys, funResult=resty}) -> do tys <- mapM transExp es
+                                                                       if tys==formaltys
+                                                                          then return resty
+                                                                          else throwError $ SE(pos, parameterTypesDoesNotMatchFunctionTypes)
+          Just _ -> throwError $ SE(pos, variableIsNotFunction $ TSym.name funcsymbol)
+          Nothing -> throwError $ SE(pos, undefinedFuncError $ TSym.name funcsymbol) 
 -- Assignment
 transExp TAbsyn.AssignExp{TAbsyn.assignVar=var, TAbsyn.assignExp=exp, TAbsyn.assignPos=pos}
   = do tvar <- transVar var
@@ -277,8 +284,9 @@ transExp TAbsyn.RecordExp{TAbsyn.recordFields=efields, TAbsyn.recordTyp=recordty
                                                     let recsymbols = map fst symboltypair
                                                     let rectys     = map snd symboltypair
                                                     tys <- mapM transExp exprs
+                                                    actualRecTys <- mapM (actualTy pos) rectys
                                                     if symbols==recsymbols
-                                                       then if tys==rectys
+                                                       then if tys==actualRecTys
                                                                then return rty
                                                                else throwError $ SE(pos, recTypeMisMatch)
                                                        else throwError $ SE(pos, recSymbolMisMatch)
@@ -348,15 +356,23 @@ transDec TAbsyn.VarDec{TAbsyn.varDecVar=vardec
                                                                                                        return (v', t)
                                                                                                else throwError $ SE(pos, variableInitDeclaredTypeMismatch $ TSym.name variablenamesym)
 -- Type declaration
-transDec TAbsyn.TypeDec{TAbsyn.typeDecName=typename
-                       ,TAbsyn.typeDecTy=absynty
-                       ,TAbsyn.typeDecPos=_} = do (v, t, _, _) <- get
-                                                  refNothing <- liftIO $ newIORef Nothing
-                                                  let tempNameType = TigSTy.Name(typename, refNothing)
-                                                  let t' = Map.insert typename tempNameType t
-                                                  ty <- withBinding v t' (transTy absynty)
-                                                  liftIO $ writeIORef refNothing $ Just ty
-                                                  return (v, t')
+transDec (TAbsyn.TypeDec decs) = do (v, t, _, _) <- get
+                                    let typenames = map TAbsyn.typedecName decs
+                                    let typeposes = map TAbsyn.typedecPos decs
+                                    mapM_ checkTypeName $ zip typenames typeposes
+                                    refNothings <- mapM (\_ -> liftIO $ newIORef Nothing) decs
+                                    let tempNameTypes = zipWith (\namesym -> \refnothing -> TigSTy.Name(namesym, refnothing)) typenames refNothings
+                                    let t' = foldr (insert') t (zip typenames tempNameTypes)
+                                    let absyntys = map TAbsyn.typedecTy decs
+                                    tys <- mapM (withBinding v t' . transTy) absyntys
+                                    mapM_ rewriteRefNothing $ zip refNothings tys
+                                    return (v, t')
+                                 where insert' (k, v)= Map.insert k v
+                                       rewriteRefNothing (refNothing, ty) = liftIO $ writeIORef refNothing $ Just ty
+                                       checkTypeName (typename, pos) = do (_, t, _, _) <- get
+                                                                          if typename `Map.member` t
+                                                                             then throwError $ SE(pos, redefiningType $ TSym.name typename)
+                                                                             else return ()
 
 transTy :: TAbsyn.Ty -> SementState TigSTy.Ty
 transTy (TAbsyn.NameTy(namesymbol, pos)) = do (_, t, _, _) <- get
