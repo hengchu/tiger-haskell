@@ -243,7 +243,8 @@ transExp TAbsyn.LetExp{TAbsyn.letDecs=decs, TAbsyn.letBody=bodyexp, TAbsyn.letPo
                                 return (v, t)
         transDecs (d:ds)   = do (v, t) <- transDec d
                                 withBinding v t (transDecs ds)
-        transDecs []       = error "Impossible case for transDecs"
+        transDecs []       = do (v, t, _, _) <- get
+                                return (v, t)
         checkLetExpInternal = transExp bodyexp
 -- Array expression
 transExp TAbsyn.ArrayExp{TAbsyn.arrayTyp=arraytypesymbol, TAbsyn.arraySize=szexp, TAbsyn.arrayInit=initexp, TAbsyn.arrayPos=pos}
