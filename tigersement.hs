@@ -411,17 +411,11 @@ transProg' initialS (TAbsyn.Pdecs (d:decs)) = do errorOrResSt <- runErrorT $ run
                                                    Right (_, s) -> transProg' s (TAbsyn.Pdecs decs)
 transProg' _ (TAbsyn.Pdecs []) = return $ Right ()
 
-transProg :: TSym.SymbolMap -> TAbsyn.Program -> IO (Either SementError ())
-transProg symmap prog = let 
-                          emptyState = (initialVenv, initialTenv, 0 :: TigSTy.Uniq, 0)
-                          intsym = TSym.symbol "int" symmap
-                          stringsym = TSym.symbol "string" symmap
-                          insert' (sym, ty) = Map.insert sym ty
-                          refineSyms ((maybesym, ty):rest) = case maybesym of
-                                                               Nothing  -> refineSyms rest
-                                                               Just sym -> (sym, ty):(refineSyms rest)
-                          refineSyms [] = []
-                          initialVenv = Map.empty
-                          initialTenv = foldr insert' Map.empty (refineSyms [(intsym, TigSTy.INT), (stringsym, TigSTy.String)])
-                        in
-                          transProg' emptyState prog
+transProg :: TAbsyn.Program -> IO (Either SementError ())
+transProg prog = do intsym <- TSym.symbol "int"
+                    stringsym <- TSym.symbol "string"
+                    let insert' (sym, ty) = Map.insert sym ty
+                    let initialVenv = Map.empty
+                    let initialTenv = foldr insert' Map.empty [(intsym, TigSTy.INT), (stringsym, TigSTy.String)]
+                    let emptyState = (initialVenv, initialTenv, 0 :: TigSTy.Uniq, 0)
+                    transProg' emptyState prog

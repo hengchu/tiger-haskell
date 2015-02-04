@@ -11,8 +11,9 @@ import Data.Functor.Identity
 import qualified TigerAbsyn as TAbsyn
 import qualified TigerSymbol as S
 import Data.Maybe
+import Data.IORef.MonadIO
 
-type TParsec a b = Parsec [a] () b
+type TParsec a b = ParsecT [a] () IO b
 type TigParsec b = TParsec PToken b
 
 data PToken = PToken TLex.AlexPosn TLex.TokenClass
@@ -21,24 +22,11 @@ data PToken = PToken TLex.AlexPosn TLex.TokenClass
 data LvalueTail = Dot (S.Symbol, TLex.AlexPosn)
                 | Bracket (TAbsyn.Exp, TLex.AlexPosn)
 
-parse :: [TLex.Token] -> Either ParseError (TAbsyn.Program, S.SymbolMap)
+parse :: [TLex.Token] -> IO (Either ParseError TAbsyn.Program)
 parse tokens =
     let
 
       ptokens   = map tokenToPToken tokens
-      symbolmap = S.symbolMapFromStrings idstrs
-                  where idstrs = map stripId ids
-                        ids = filter isID ptokens
-                        stripId (PToken _ (TLex.Id str)) = str
-                        isID (PToken _ (TLex.Id _)) = True
-                        isID (PToken _ _          ) = False
-
-      psymbol :: String -> S.Symbol
-      psymbol str = fromJust $ S.symbol str symbolmap
-
-      pname :: S.Symbol -> String
-      pname = S.name
-
       tokenToPToken :: TLex.Token -> PToken
       tokenToPToken (TLex.Token p c _) = PToken p c
 
@@ -96,7 +84,8 @@ parse tokens =
                     return (TAbsyn.StringExp (str, pos), pos)
 
       parseTypeId = do (PToken pos _, str) <- pId
-                       return (psymbol str, pos)
+                       strsym <- liftIO $ S.symbol str
+                       return (strsym, pos)
 
       parseSimpleId = parseTypeId
 
@@ -333,6 +322,4 @@ parse tokens =
 
     in
 
-      case (Text.Parsec.parse program "INPUT" ptokens) of
-        Left err -> Left err
-        Right p -> Right (p, symbolmap)
+      runPT program () "INPUT" ptokens

@@ -10,9 +10,10 @@ main = do args <- getArgs
           let eithertoken = TLex.scanner fileContent
           case eithertoken of
             Left lexerr -> print lexerr
-            Right tokens -> case TP.parse tokens of
-                              Left parseError -> print parseError
-                              Right (absyn, smap) -> do analysis <- TS.transProg smap absyn
-                                                        case analysis of
-                                                          Left sementerr -> print sementerr
-                                                          Right _ -> print "Sementic analysis complete."
+            Right tokens -> do parseresult <- TP.parse tokens
+                               case parseresult of
+                                 Left parseError -> print parseError
+                                 Right absyn -> do analysis <- TS.transProg absyn
+                                                   case analysis of
+                                                     Left sementerr -> print sementerr
+                                                     Right _ -> print "Sementic analysis complete."

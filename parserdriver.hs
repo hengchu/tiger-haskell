@@ -9,6 +9,7 @@ main = do args <- getArgs
           let res = scanner fileContent
           case res of
             Left lexError -> print lexError
-            Right tokens -> (print res) >> (case TigerParser.parse tokens of
-                               Left parseError -> print parseError
-                               Right (pg, _) -> print pg)
+            Right tokens -> do parseresult <- TigerParser.parse tokens
+                               case parseresult of
+                                 Left  err -> print err
+                                 Right program -> print program
