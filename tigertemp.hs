@@ -12,6 +12,7 @@ import Data.IORef
 import TigerSymbol
 
 data Temp  = Temp Int
+             deriving (Eq)
 type Label = Symbol
 
 instance Show Temp where

@@ -18,11 +18,13 @@ data Frame  = Frame { frameFormals     :: Int
                      ,frameOfflist     :: [Offset]
                      ,frameLocalCount  :: IORef Int -- Count of local variables in frame
                     }
+                    deriving (Eq)
 data Frag = PROC { procName  :: Temp.Label
                  , procBody  :: Tree.Stm
                  , procFrame :: Frame }
           | DATA { dataLab :: Temp.Label
                  , dataStr :: String }
+          deriving (Eq)
 
 newFrame :: Int -> IO (Frame, [Offset])
 newFrame numFormals = 

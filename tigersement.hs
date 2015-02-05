@@ -143,8 +143,10 @@ transExp :: TAbsyn.Exp -> SementState ExpTy
 transExp TAbsyn.OpExp{TAbsyn.opLeft=el, TAbsyn.opOper=op, TAbsyn.opRight=er, TAbsyn.opPos=pos}
   = do tl <- transExp el
        tr <- transExp er
-       if (tl == tr)
-          then case tl of
+       atl <- actualTy pos tl
+       atr <- actualTy pos tr
+       if (atl == atr)
+          then case atl of
                  TigSTy.INT    -> return TigSTy.INT
                  TigSTy.String -> return TigSTy.INT
                  TigSTy.Nil    -> throwError $ SE(pos, binNilOp)
@@ -176,7 +178,9 @@ transExp TAbsyn.AppExp{TAbsyn.appFunc=funcsymbol, TAbsyn.appArgs=es, TAbsyn.appP
   = do (venv, _, _, _) <- get
        case Map.lookup funcsymbol venv of
           Just (FunEntry{funFormals=formaltys, funResult=resty}) -> do tys <- mapM transExp es
-                                                                       if tys==formaltys
+                                                                       actualTys <- mapM (actualTy pos) tys
+                                                                       actualFormalTys <- mapM (actualTy pos) formaltys
+                                                                       if actualTys==actualFormalTys
                                                                           then return resty
                                                                           else throwError $ SE(pos, parameterTypesDoesNotMatchFunctionTypes)
           Just _ -> throwError $ SE(pos, variableIsNotFunction $ TSym.name funcsymbol)
@@ -196,7 +200,9 @@ transExp TAbsyn.IfExp{TAbsyn.ifTest=testexp, TAbsyn.ifThen=thenexp, TAbsyn.ifEls
           then if isJust maybeElse
                then do let elseexp = fromJust maybeElse
                        elsety <- transExp elseexp
-                       if thenty==elsety
+                       actualThenTy <- actualTy pos thenty
+                       actualElseTy <- actualTy pos elsety
+                       if actualThenTy==actualElseTy
                           then return elsety
                           else throwError $ SE(pos, ifthenTypeMismatch)
                else return thenty
@@ -285,9 +291,10 @@ transExp TAbsyn.RecordExp{TAbsyn.recordFields=efields, TAbsyn.recordTyp=recordty
                                                     let recsymbols = map fst symboltypair
                                                     let rectys     = map snd symboltypair
                                                     tys <- mapM transExp exprs
+                                                    actualTys <- mapM (actualTy pos) tys
                                                     actualRecTys <- mapM (actualTy pos) rectys
                                                     if symbols==recsymbols
-                                                       then if tys==actualRecTys
+                                                       then if actualTys==actualRecTys
                                                                then return rty
                                                                else throwError $ SE(pos, recTypeMisMatch)
                                                        else throwError $ SE(pos, recSymbolMisMatch)
@@ -412,10 +419,30 @@ transProg' initialS (TAbsyn.Pdecs (d:decs)) = do errorOrResSt <- runErrorT $ run
 transProg' _ (TAbsyn.Pdecs []) = return $ Right ()
 
 transProg :: TAbsyn.Program -> IO (Either SementError ())
-transProg prog = do intsym <- TSym.symbol "int"
-                    stringsym <- TSym.symbol "string"
+transProg prog = do intsym       <- TSym.symbol "int"
+                    stringsym    <- TSym.symbol "string"
+                    printsym     <- TSym.symbol "print"
+                    flushsym     <- TSym.symbol "flush"
+                    getcharsym   <- TSym.symbol "getchar"
+                    ordsym       <- TSym.symbol "ord"
+                    chrsym       <- TSym.symbol "chr"
+                    sizesym      <- TSym.symbol "size"
+                    substringsym <- TSym.symbol "substring"
+                    concatsym    <- TSym.symbol "concat"
+                    notsym       <- TSym.symbol "not"
+                    exitsym      <- TSym.symbol "exit"
                     let insert' (sym, ty) = Map.insert sym ty
-                    let initialVenv = Map.empty
-                    let initialTenv = foldr insert' Map.empty [(intsym, TigSTy.INT), (stringsym, TigSTy.String)]
+                    let initialVenv = foldr insert' Map.empty [(printsym, FunEntry { funFormals=[TigSTy.String], funResult=TigSTy.Unit })
+                                                              ,(flushsym, FunEntry { funFormals=[], funResult=TigSTy.Unit })
+                                                              ,(getcharsym, FunEntry { funFormals=[], funResult=TigSTy.String })
+                                                              ,(ordsym, FunEntry { funFormals=[TigSTy.String], funResult=TigSTy.INT })
+                                                              ,(chrsym, FunEntry { funFormals=[TigSTy.INT], funResult=TigSTy.String })
+                                                              ,(sizesym, FunEntry { funFormals=[TigSTy.String], funResult=TigSTy.INT })
+                                                              ,(substringsym, FunEntry { funFormals=[TigSTy.String, TigSTy.INT, TigSTy.INT], funResult=TigSTy.String })
+                                                              ,(concatsym, FunEntry { funFormals=[TigSTy.String, TigSTy.String], funResult=TigSTy.String })
+                                                              ,(notsym, FunEntry { funFormals=[TigSTy.INT], funResult=TigSTy.INT })
+                                                              ,(exitsym, FunEntry { funFormals=[TigSTy.INT], funResult=TigSTy.Unit })]
+                    let initialTenv = foldr insert' Map.empty [(intsym, TigSTy.INT), 
+                                                               (stringsym, TigSTy.String)]
                     let emptyState = (initialVenv, initialTenv, 0 :: TigSTy.Uniq, 0)
                     transProg' emptyState prog
