@@ -36,6 +36,7 @@ module TigerTranslate
   , createMainFrag
   , reset
   , getResult
+  , nilGexp
   ) where
 
 import qualified TigerFrame as Frame
@@ -74,6 +75,9 @@ data Gexp = Ex Tr.Exp
 
 outerMost :: Level
 outerMost = TOP
+
+nilGexp :: Gexp
+nilGexp = Ex $ Tr.CONST(0)
 
 newLevel :: Level -> [a] -> IO (Level, [(a, Access)])
 newLevel parent formals =

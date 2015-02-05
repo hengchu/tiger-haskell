@@ -4,11 +4,13 @@ module TigerSement
        , SementError
        ) where
 
-import qualified TigerSementTypes as TigSTy
-import qualified TigerLexer as TLex
-import qualified TigerAbsyn as TAbsyn
-import qualified TigerSymbol as TSym
-import qualified Data.Map as Map
+import qualified TigerSementTypes as TSTy
+import qualified TigerLexer       as TLex
+import qualified TigerAbsyn       as TAbsyn
+import qualified TigerSymbol      as TSym
+import qualified TigerTemp        as TTmp
+import qualified TigerTranslate   as TTran
+import qualified Data.Map         as Map
 import Data.Maybe
 import Control.Monad.State.Strict
 import Control.Monad.Error
@@ -16,15 +18,15 @@ import Data.IORef
 import Data.List
 
 data SementError = SE (TLex.AlexPosn, String) deriving (Show, Eq)
-type ExpTy = TigSTy.Ty
+type ExpTy = (TTran.Gexp, TSTy.Ty)
 
-data EnvEntry = VarEntry {varTy::TigSTy.Ty, varReadOnly::Bool}
-              | FunEntry {funFormals::[TigSTy.Ty], funResult::TigSTy.Ty}
+data EnvEntry = VarEntry {varAccess :: TTran.Access, varTy::TSTy.Ty, varReadOnly::Bool}
+              | FunEntry {funLevel :: TTran.Level, funLabel :: TTmp.Label, funFormals::[TSTy.Ty], funResult::TSTy.Ty}
 
 type Venv    = Map.Map TSym.Symbol EnvEntry
-type Tenv    = Map.Map TSym.Symbol TigSTy.Ty
+type Tenv    = Map.Map TSym.Symbol TSTy.Ty
 type LoopLevel = Int
-type SementStates = (Venv, Tenv, TigSTy.Uniq, LoopLevel)
+type SementStates = (Venv, Tenv, TSTy.Uniq, LoopLevel)
 
 type SementState = StateT SementStates (ErrorT SementError IO)
 
@@ -72,15 +74,16 @@ circularType                            = "Circular type discovered!"
 redefiningType name                     = "Redefining type: " ++ name
 variableIsNotFunction name              = "Variable is not function: " ++ name
 parameterTypesDoesNotMatchFunctionTypes = "Parameter types does not match function declared types"
+nonOrdCmpOnStr                          = "Non order comparison operator on string"
 
 -- Generates a new value of Uniq type
-genUnique :: SementState TigSTy.Uniq
+genUnique :: SementState TSTy.Uniq
 genUnique = do (venv, tenv, a, inloop) <- get
                put (venv, tenv, a+1, inloop)
                return a
 
-actualTy' :: TLex.AlexPosn -> TigSTy.Ty -> [TigSTy.Ty] -> SementState TigSTy.Ty
-actualTy' pos a@(TigSTy.Name (_, iorefmaybety)) searched = do if a `elem` searched
+actualTy' :: TLex.AlexPosn -> TSTy.Ty -> [TSTy.Ty] -> SementState TSTy.Ty
+actualTy' pos a@(TSTy.Name (_, iorefmaybety)) searched = do if a `elem` searched
                                                                  then throwError $ SE(pos, circularType ++ ": "  ++ (show a))
                                                                  else do maybety <- liftIO $ readIORef iorefmaybety
                                                                          case maybety of
@@ -90,38 +93,14 @@ actualTy' pos otherType searched = if (otherType `elem` searched)
                                       then throwError $ SE(pos, circularType ++ ": " ++ (show otherType))
                                       else return otherType
 
-actualTy :: TLex.AlexPosn -> TigSTy.Ty -> SementState TigSTy.Ty
+actualTy :: TLex.AlexPosn -> TSTy.Ty -> SementState TSTy.Ty
 actualTy pos a = actualTy' pos a []
 
-isRecord (TigSTy.Record _) = True
+isRecord (TSTy.Record _) = True
 isRecord _ = False
 
-isArray (TigSTy.Array _) = True
+isArray (TSTy.Array _) = True
 isArray _ = False
-
-transVar :: TAbsyn.Var -> SementState ExpTy
-transVar (TAbsyn.SimpleVar(s, pos)) = do (v, _, _, _) <- get
-                                         case Map.lookup s v of
-                                           Nothing -> throwError $ SE(pos, variableUndefined $ TSym.name s)
-                                           Just VarEntry{varTy=ty, varReadOnly=_} -> return ty
-                                           _ -> throwError $ SE(pos, nameIsNotVariable $ TSym.name s)
-transVar (TAbsyn.FieldVar(var, s, pos)) = do varty <- transVar var
-                                             aty <- actualTy pos varty
-                                             if (isRecord aty)
-                                                then do let TigSTy.Record(symboltypairs, _) = aty
-                                                        case find (\(sym, _) -> sym == s) symboltypairs of
-                                                          Just (_, ty) -> return ty
-                                                          Nothing -> throwError $ SE(pos, recordTypeHasNoField $ TSym.name s)
-                                                else throwError $ SE(pos, fieldVarOnNonRecordType $ TSym.name s)
-transVar (TAbsyn.SubscriptVar(var, exp, pos)) = do varty <- transVar var
-                                                   aty <- actualTy pos varty
-                                                   if (isArray aty)
-                                                      then do let TigSTy.Array(ty, _) = aty
-                                                              expty <- transExp exp
-                                                              if (expty == TigSTy.INT)
-                                                                  then return ty
-                                                                  else throwError $ SE(pos, subscriptIsNotIntType)
-                                                      else throwError $ SE(pos, subscriptVarOnNonArrayType)
 
 enterLoop :: SementState ()
 enterLoop = do (venv, tenv, uniq, looplevel) <- get
@@ -138,251 +117,314 @@ withBinding venv tenv checker = do s@(_, _, uniq, looplevel) <- get
                                    put s
                                    return a
 
-transExp :: TAbsyn.Exp -> SementState ExpTy
+transVar :: TTran.Level -> Maybe TTmp.Label -> TAbsyn.Var -> SementState ExpTy
+transVar level _ (TAbsyn.SimpleVar(s, pos)) = do (v, _, _, _) <- get
+                                                 case Map.lookup s v of
+                                                   Nothing                                -> throwError $ SE(pos, variableUndefined $ TSym.name s)
+                                                   Just VarEntry{varAccess=acc, varTy=ty} -> return (TTran.simpleVar acc level, ty)
+                                                   _                                      -> throwError $ SE(pos, nameIsNotVariable $ TSym.name s)
+
+transVar level breakLab (TAbsyn.FieldVar(var, s, pos)) = do (ge, varty) <- transVar level breakLab var
+                                                            aty <- actualTy pos varty
+                                                            if (isRecord aty)
+                                                               then do let TSTy.Record(symboltypairs, _) = aty
+                                                                       case findIndex (\(sym, _) -> sym == s) symboltypairs of
+                                                                         Just idx -> return (TTran.field ge idx, snd $ symboltypairs !! idx)
+                                                                         Nothing  -> throwError $ SE(pos, recordTypeHasNoField $ TSym.name s)
+                                                               else throwError $ SE(pos, fieldVarOnNonRecordType $ TSym.name s)
+
+transVar level breakLab (TAbsyn.SubscriptVar(var, idxexp, pos)) = do (ge, varty) <- transVar level breakLab var
+                                                                     aty <- actualTy pos varty
+                                                                     if (isArray aty)
+                                                                        then do let TSTy.Array(ty, _) = aty
+                                                                                (idxge, idxty) <- transExp level breakLab idxexp
+                                                                                if (idxty == TSTy.INT)
+                                                                                    then return (TTran.subscript ge idxge, ty)
+                                                                                    else throwError $ SE(pos, subscriptIsNotIntType)
+                                                                        else throwError $ SE(pos, subscriptVarOnNonArrayType)
+
+
+transExp :: TTran.Level -> Maybe TTmp.Label -> TAbsyn.Exp -> SementState ExpTy
 -- Binary Operation
-transExp TAbsyn.OpExp{TAbsyn.opLeft=el, TAbsyn.opOper=op, TAbsyn.opRight=er, TAbsyn.opPos=pos}
-  = do tl <- transExp el
-       tr <- transExp er
+transExp level breakLab TAbsyn.OpExp{TAbsyn.opLeft=el, TAbsyn.opOper=op, TAbsyn.opRight=er, TAbsyn.opPos=pos}
+  = do (gel, tl) <- transExp level breakLab el
+       (ger, tr) <- transExp level breakLab er
        atl <- actualTy pos tl
        atr <- actualTy pos tr
        if (atl == atr)
           then case atl of
-                 TigSTy.INT    -> return TigSTy.INT
-                 TigSTy.String -> return TigSTy.INT
-                 TigSTy.Nil    -> throwError $ SE(pos, binNilOp)
-                 TigSTy.Unit   -> throwError $ SE(pos, binUnitOp)
-                 _             -> case op of
-                                    TAbsyn.EqOp  -> return TigSTy.INT
-                                    TAbsyn.NeqOp -> return TigSTy.INT
-                                    _            -> throwError $ SE(pos, arrayRecOrderOp)
+                 TSTy.INT    -> return (selectFunNonStr op gel ger, TSTy.INT)
+                 TSTy.String -> do case op of
+                                     TAbsyn.EqOp  -> return (selectFunStr op gel ger, TSTy.INT)
+                                     TAbsyn.NeqOp -> return (selectFunStr op gel ger, TSTy.INT)
+                                     TAbsyn.GeOp  -> return (selectFunStr op gel ger, TSTy.INT)
+                                     TAbsyn.GtOp  -> return (selectFunStr op gel ger, TSTy.INT)
+                                     TAbsyn.LeOp  -> return (selectFunStr op gel ger, TSTy.INT)
+                                     TAbsyn.LtOp  -> return (selectFunStr op gel ger, TSTy.INT)
+                                     _            -> throwError $ SE(pos, nonOrdCmpOnStr)
+                 TSTy.Nil    -> throwError $ SE(pos, binNilOp)
+                 TSTy.Unit   -> throwError $ SE(pos, binUnitOp)
+                 _           -> case op of
+                                  TAbsyn.EqOp  -> return (selectFunNonStr op gel ger, TSTy.INT)
+                                  TAbsyn.NeqOp -> return (selectFunNonStr op gel ger, TSTy.INT)
+                                  _            -> throwError $ SE(pos, arrayRecOrderOp)
           else throwError $ SE(pos, binOpNonMatchingError)
+  where selectFunNonStr TAbsyn.EqOp  = TTran.eqCmp
+        selectFunNonStr TAbsyn.NeqOp = TTran.notEqCmp
+        selectFunNonStr o            = TTran.arithmetic o
+        selectFunStr    TAbsyn.EqOp  = TTran.eqStr
+        selectFunStr    TAbsyn.NeqOp = TTran.notEqStr
+        selectFunStr    _            = error "Compiler error: non order operator on string"
+
+
 -- Variable
-transExp (TAbsyn.VarExp var) = do tvar <- transVar var
-                                  return tvar
+transExp level breakLab (TAbsyn.VarExp var) = transVar level breakLab var
 -- Nil expression
-transExp TAbsyn.NilExp = return TigSTy.Nil
+transExp _     _ TAbsyn.NilExp = return (TTran.nilGexp, TSTy.Nil)
 -- Int expression
-transExp (TAbsyn.IntExp _) = return TigSTy.INT
+transExp _     _ (TAbsyn.IntExp val) = return (TTran.intExp val, TSTy.INT)
 -- String
-transExp (TAbsyn.StringExp _) = return TigSTy.String
+transExp _     _ (TAbsyn.StringExp (str, _)) = return (TTran.stringExp str, TSTy.String)
 -- Sequence expression
-transExp (TAbsyn.SeqExp ((e, _):[]))
-  = do ty <- transExp e
-       return ty
-transExp (TAbsyn.SeqExp ((e, _):es))
-  = do _ <- transExp e
-       transExp (TAbsyn.SeqExp es)
-transExp (TAbsyn.SeqExp []) = error "Impossible SeqExp case"
+transExp level breakLab (TAbsyn.SeqExp ((e, _):[]))
+  = transExp level breakLab e
+transExp level breakLab (TAbsyn.SeqExp ((e, _):es))
+  = do (ge, _) <- transExp level breakLab e
+       (greste, ty) <- transExp level breakLab (TAbsyn.SeqExp es)
+       return (TTran.constructEseq ge greste, ty)
+transExp _ _ (TAbsyn.SeqExp []) = error "Impossible SeqExp case"
 -- Function application
-transExp TAbsyn.AppExp{TAbsyn.appFunc=funcsymbol, TAbsyn.appArgs=es, TAbsyn.appPos=pos}
+transExp level breakLab TAbsyn.AppExp{TAbsyn.appFunc=funcsymbol, TAbsyn.appArgs=es, TAbsyn.appPos=pos}
   = do (venv, _, _, _) <- get
        case Map.lookup funcsymbol venv of
-          Just (FunEntry{funFormals=formaltys, funResult=resty}) -> do tys <- mapM transExp es
-                                                                       actualTys <- mapM (actualTy pos) tys
-                                                                       actualFormalTys <- mapM (actualTy pos) formaltys
-                                                                       if actualTys==actualFormalTys
-                                                                          then return resty
-                                                                          else throwError $ SE(pos, parameterTypesDoesNotMatchFunctionTypes)
+          Just (FunEntry{ funLevel=funlvl
+                        , funLabel=funlab
+                        , funFormals=formaltys
+                        , funResult=resty }) -> do (ges, tys) <- liftM unzip $ mapM (transExp level breakLab) es
+                                                   actualTys  <- mapM (actualTy pos) tys
+                                                   actualFormalTys <- mapM (actualTy pos) formaltys
+                                                   if actualTys==actualFormalTys
+                                                      then return (TTran.callFunction funlab level funlvl ges, resty)
+                                                      else throwError $ SE(pos, parameterTypesDoesNotMatchFunctionTypes)
           Just _ -> throwError $ SE(pos, variableIsNotFunction $ TSym.name funcsymbol)
           Nothing -> throwError $ SE(pos, undefinedFuncError $ TSym.name funcsymbol) 
 -- Assignment
-transExp TAbsyn.AssignExp{TAbsyn.assignVar=var, TAbsyn.assignExp=exp, TAbsyn.assignPos=pos}
-  = do tvar <- transVar var
-       texp <- transExp exp
+transExp level breakLab TAbsyn.AssignExp{TAbsyn.assignVar=var, TAbsyn.assignExp=exp, TAbsyn.assignPos=pos}
+  = do (gevar, tvar) <- transVar level breakLab var
+       (geexp, texp) <- transExp level breakLab exp
        if tvar == texp
-          then return $ TigSTy.Unit
+          then return $ (TTran.assign gevar geexp, TSTy.Unit)
           else throwError $ SE(pos, assignmentTypeMismatch)
 -- If expression
-transExp TAbsyn.IfExp{TAbsyn.ifTest=testexp, TAbsyn.ifThen=thenexp, TAbsyn.ifElse=maybeElse, TAbsyn.ifPos=pos}
-  = do testty <- transExp testexp
-       thenty <- transExp thenexp
-       if testty == TigSTy.INT
+transExp level breakLab TAbsyn.IfExp{TAbsyn.ifTest=testexp, TAbsyn.ifThen=thenexp, TAbsyn.ifElse=maybeElse, TAbsyn.ifPos=pos}
+  = do (testge, testty) <- transExp level breakLab testexp
+       (thenge, thenty) <- transExp level breakLab thenexp
+       if testty == TSTy.INT
           then if isJust maybeElse
                then do let elseexp = fromJust maybeElse
-                       elsety <- transExp elseexp
+                       (elsege, elsety) <- transExp level breakLab elseexp
                        actualThenTy <- actualTy pos thenty
                        actualElseTy <- actualTy pos elsety
                        if actualThenTy==actualElseTy
-                          then return elsety
+                          then return (TTran.ifThenElse testge thenge elsege, elsety)
                           else throwError $ SE(pos, ifthenTypeMismatch)
-               else return thenty
+               else return (TTran.ifThen testge thenge, thenty)
           else throwError $ SE(pos, illegalIfTestType)
 -- While expression
-transExp TAbsyn.WhileExp{TAbsyn.whileTest=testexp, TAbsyn.whileBody=bodyexp, TAbsyn.whilePos=pos}
-  = do testty <- transExp testexp
-       if testty == TigSTy.INT
-          then do bodyty <- checkWhileInternal
-                  if bodyty == TigSTy.Unit
-                     then return TigSTy.Unit
+transExp level breakLab TAbsyn.WhileExp{TAbsyn.whileTest=testexp, TAbsyn.whileBody=bodyexp, TAbsyn.whilePos=pos}
+  = do (testge, testty) <- transExp level breakLab testexp
+       donelab <- liftIO TTmp.newLabel
+       if testty == TSTy.INT
+          then do (bodyge, bodyty) <- checkWhileInternal donelab
+                  if bodyty == TSTy.Unit
+                     then return (TTran.whileLoop testge bodyge donelab, TSTy.Unit)
                      else throwError $ SE(pos, whileLoopBodyUnit)
           else throwError $ SE(pos, illegalWhileTestType)
-  where checkWhileInternal = do enterLoop
-                                bodyty <- transExp bodyexp
-                                exitLoop
-                                return bodyty
+  where checkWhileInternal donelab = do enterLoop
+                                        bodyres <- transExp level (Just donelab) bodyexp
+                                        exitLoop
+                                        return bodyres
 -- For expression
-transExp TAbsyn.ForExp{TAbsyn.forVar=vardec, TAbsyn.forLo=lowexp, TAbsyn.forHi=highexp, TAbsyn.forBody=bodyexp, TAbsyn.forPos=pos}
+transExp level breakLab TAbsyn.ForExp{TAbsyn.forVar=vardec, TAbsyn.forLo=lowexp, TAbsyn.forHi=highexp, TAbsyn.forBody=bodyexp, TAbsyn.forPos=pos}
   = do (venv, tenv, _, _) <- get
-       let venv' = Map.insert (TAbsyn.vardecName vardec) VarEntry{varTy=TigSTy.INT, varReadOnly=False} venv
-       lowty <- transExp lowexp
-       highty <- transExp highexp
-       if (lowty == highty) && (lowty == TigSTy.INT)
-          then withBinding venv' tenv checkForInternal
+       counteraccess <- liftIO $ TTran.allocInFrame level
+       let countergexp = TTran.simpleVar counteraccess level
+       let venv' = Map.insert (TAbsyn.vardecName vardec) VarEntry{varAccess=counteraccess, varTy=TSTy.INT, varReadOnly=False} venv
+       donelab <- liftIO TTmp.newLabel
+       (lowge, lowty) <- transExp level breakLab lowexp
+       (highge, highty) <- transExp level breakLab highexp
+       if (lowty == highty) && (lowty == TSTy.INT)
+          then withBinding venv' tenv $ checkForInternal donelab lowge highge countergexp
           else throwError $ SE(pos, forLoopBoundaryType)
-    where checkForInternal = do enterLoop
-                                bodyty <- transExp bodyexp
-                                exitLoop
-                                if (bodyty == TigSTy.Unit)
-                                   then return TigSTy.Unit
-                                   else throwError $ SE(pos, forLoopBodyUnit)
+    where checkForInternal donelab logexp higexp counterge = do enterLoop
+                                                                (bodyge, bodyty) <- transExp level (Just donelab) bodyexp
+                                                                exitLoop
+                                                                if (bodyty == TSTy.Unit)
+                                                                   then return (TTran.forLoop logexp higexp bodyge donelab counterge, TSTy.Unit)
+                                                                   else throwError $ SE(pos, forLoopBodyUnit)
 -- Break expression
-transExp TAbsyn.BreakExp{TAbsyn.breakPos=pos}
+transExp _ (Just breakLab) TAbsyn.BreakExp{TAbsyn.breakPos=pos}
   = do (_, _, _, inloop) <- get
        if (inloop > 0)
-          then return TigSTy.Unit
+          then return (TTran.break breakLab, TSTy.Unit)
           else throwError $ SE(pos, breakExpNotInLoop)
+transExp _ _ TAbsyn.BreakExp{TAbsyn.breakPos=pos} = throwError $ SE(pos, breakExpNotInLoop)
 -- Let expression
-transExp TAbsyn.LetExp{TAbsyn.letDecs=decs, TAbsyn.letBody=bodyexp, TAbsyn.letPos=_}
-  = do (venv', tenv') <- transDecs decs
-       withBinding venv' tenv' checkLetExpInternal
-  where transDecs (d:[])   = do (v, t) <- transDec d
-                                return (v, t)
-        transDecs (d:ds)   = do (v, t) <- transDec d
-                                withBinding v t (transDecs ds)
+transExp level breakLab TAbsyn.LetExp{TAbsyn.letDecs=decs, TAbsyn.letBody=bodyexp, TAbsyn.letPos=_}
+  = do (venv', tenv', ges) <- transDecs decs
+       (bodyge, bodyty) <- withBinding venv' tenv' checkLetExpInternal
+       return (TTran.letExpression ges bodyge, bodyty)
+  where transDecs (d:[])   = do (v, t, ges) <- transDec level breakLab d
+                                return (v, t, ges)
+        transDecs (d:ds)   = do (v, t, ges) <- transDec level breakLab d
+                                (v', t', gess) <- withBinding v t (transDecs ds)
+                                return (v', t', ges++gess)
         transDecs []       = do (v, t, _, _) <- get
-                                return (v, t)
-        checkLetExpInternal = transExp bodyexp
+                                return (v, t, [])
+        checkLetExpInternal = transExp level breakLab bodyexp
 -- Array expression
-transExp TAbsyn.ArrayExp{TAbsyn.arrayTyp=arraytypesymbol, TAbsyn.arraySize=szexp, TAbsyn.arrayInit=initexp, TAbsyn.arrayPos=pos}
+transExp level breakLab TAbsyn.ArrayExp{TAbsyn.arrayTyp=arraytypesymbol, TAbsyn.arraySize=szexp, TAbsyn.arrayInit=initexp, TAbsyn.arrayPos=pos}
   = do (_, tenv, _, _) <- get
        case Map.lookup arraytypesymbol tenv of
           Just ty -> checkArrayExpInternal ty
           Nothing -> throwError $ SE(pos, undefinedArrError $ TSym.name arraytypesymbol)
     where checkArrayExpInternal ty = do aty <- actualTy pos ty
-                                        szty <- transExp szexp
-                                        initty <- transExp initexp
+                                        (szge, szty) <- transExp level breakLab szexp
+                                        (initge, initty) <- transExp level breakLab initexp
                                         if (isArray aty)
-                                           then do let TigSTy.Array (internalTy, _) = aty
+                                           then do let TSTy.Array (internalTy, _) = aty
                                                    ainternalTy <- actualTy pos internalTy
                                                    if (ainternalTy == initty)
-                                                      then if (szty == TigSTy.INT)
-                                                           then return aty
+                                                      then if (szty == TSTy.INT)
+                                                           then return (TTran.createArray szge initge, aty)
                                                            else throwError $ SE(pos, arraySizeNotInt)
                                                       else throwError $ SE(pos, arrayInitMismatch)
                                            else throwError $ SE(pos, nonarrayCreation $ TSym.name arraytypesymbol)
-          isArray (TigSTy.Array _) = True
-          isArray _                = False
 -- Record creation
-transExp TAbsyn.RecordExp{TAbsyn.recordFields=efields, TAbsyn.recordTyp=recordtypesymbol, TAbsyn.recordPos=pos}
+transExp level breakLab TAbsyn.RecordExp{TAbsyn.recordFields=efields, TAbsyn.recordTyp=recordtypesymbol, TAbsyn.recordPos=pos}
   = do (_, tenv, _, _) <- get
        case Map.lookup recordtypesymbol tenv of
-         Just rty@(TigSTy.Record (symboltypair, _)) -> checkRecordInternal symboltypair rty
-         Just nty@(TigSTy.Name (namesymbol, _))     -> do aty <- actualTy pos nty
-                                                          if isRecord aty
-                                                             then do let TigSTy.Record (symboltypair, _) = aty
-                                                                     checkRecordInternal symboltypair aty
-                                                             else throwError $ SE(pos, illegalRecType $ TSym.name namesymbol)
+         Just rty@(TSTy.Record (symboltypair, _)) -> checkRecordInternal symboltypair rty
+         Just nty@(TSTy.Name (namesymbol, _))     -> do aty <- actualTy pos nty
+                                                        if isRecord aty
+                                                           then do let TSTy.Record (symboltypair, _) = aty
+                                                                   checkRecordInternal symboltypair aty
+                                                           else throwError $ SE(pos, illegalRecType $ TSym.name namesymbol)
          _ -> throwError $ SE(pos, undefinedRecError $ TSym.name recordtypesymbol)
     where fst'  (a, _, _) = a
           snd'  (_, b, _) = b
-          thrd' (_, _, c) = c
           checkRecordInternal symboltypair rty = do let symbols = map fst' efields
                                                     let exprs   = map snd' efields
                                                     let recsymbols = map fst symboltypair
                                                     let rectys     = map snd symboltypair
-                                                    tys <- mapM transExp exprs
+                                                    (ges, tys) <- liftM unzip $ mapM (transExp level breakLab) exprs
                                                     actualTys <- mapM (actualTy pos) tys
                                                     actualRecTys <- mapM (actualTy pos) rectys
                                                     if symbols==recsymbols
                                                        then if actualTys==actualRecTys
-                                                               then return rty
+                                                               then return (TTran.createRecord ges, rty)
                                                                else throwError $ SE(pos, recTypeMisMatch)
                                                        else throwError $ SE(pos, recSymbolMisMatch)
                                         
 
-transDec :: TAbsyn.Dec -> SementState (Venv, Tenv)
+transDec :: TTran.Level -> Maybe TTmp.Label -> TAbsyn.Dec -> SementState (Venv, Tenv, [TTran.Gexp])
 -- Function declaration
-transDec (TAbsyn.FunctionDec fs) = do let namesymbols = map TAbsyn.fundecName fs
-                                      let paramfields = map TAbsyn.fundecParams fs
-                                      let resultmaybesymbols = map TAbsyn.fundecResult fs
-                                      (venv, tenv, _, _) <- get
-                                      resultTys <- mapM (maybeResSymToTy tenv) resultmaybesymbols
-                                      paramTyss <- mapM (mapM $ tfieldToTy tenv) paramfields
-                                      let fundecs = zipWith funDecZipper paramTyss resultTys
-                                      let funsymboldecpair = zip namesymbols fundecs
-                                      let venv' = foldr insert' venv funsymboldecpair
-                                      withBinding venv' tenv (mapM_ checkBody fs)
-                                      return (venv', tenv)
-                                   where maybeResSymToTy _    Nothing  = return TigSTy.Unit
-                                         maybeResSymToTy tenv (Just (s, pos)) = do if s `Map.member` tenv
-                                                                                      then return $ fromJust $ Map.lookup s tenv
-                                                                                      else throwError $ SE(pos, undefinedFuncRetType $ TSym.name s)
-                                         funDecZipper paramTys resultTy = FunEntry{funFormals=paramTys, funResult=resultTy}
-                                         insert' (k, v) = Map.insert k v
-                                         checkBody TAbsyn.Fundec{TAbsyn.fundecName=namesym
-                                                                  ,TAbsyn.fundecParams=tfields
-                                                                  ,TAbsyn.fundecResult=mayberes
-                                                                  ,TAbsyn.fundecBody=bexp
-                                                                  ,TAbsyn.fundecPos=pos}
-                                           = do (v, t, _, _) <- get
-                                                let paramnamesymbols = map TAbsyn.tfieldName tfields
-                                                paramTys <- mapM (tfieldToTy t) tfields
-                                                let varentries = map (\ty -> VarEntry{varTy=ty, varReadOnly=False}) paramTys
-                                                let varNameEntryPairs = zip paramnamesymbols varentries
-                                                let v' = foldr insert' v varNameEntryPairs
-                                                bodyTy <- withBinding v' t $ transExp bexp
-                                                case mayberes of
-                                                  Nothing -> if (bodyTy == TigSTy.Unit) 
-                                                                then return () 
-                                                                else throwError $ SE(pos, procedureHasNonUnitRetType $ TSym.name namesym)
-                                                  Just (rettysym, rettypos) -> case Map.lookup rettysym t of
-                                                                                  Just retty -> do actualretty <- actualTy pos retty
-                                                                                                   if actualretty == bodyTy 
-                                                                                                      then return ()
-                                                                                                      else throwError $ SE(pos, functionRetBodyTypeMismatch $ TSym.name namesym)
-                                                                                  Nothing -> throwError $ SE(rettypos, undefinedFuncRetType $ TSym.name namesym)
-                                         tfieldToTy tenv (TAbsyn.Tfield {TAbsyn.tfieldName=_
-                                                                        ,TAbsyn.tfieldTyp=s
-                                                                        ,TAbsyn.tfieldPos=pos}) = do if s `Map.member` tenv
-                                                                                                        then return $ fromJust $ Map.lookup s tenv
-                                                                                                        else throwError $ SE(pos, undefinedFuncParamType)
+transDec level breakLab (TAbsyn.FunctionDec fs) = do let namesymbols = map TAbsyn.fundecName fs
+                                                     let paramfields = map TAbsyn.fundecParams fs
+                                                     let resultmaybesymbols = map TAbsyn.fundecResult fs
+                                                     (venv, tenv, _, _) <- get
+                                                     resultTys <- mapM (maybeResSymToTy tenv) resultmaybesymbols
+                                                     paramTyss <- mapM (mapM $ tfieldToTy tenv) paramfields
+                                                     funlabels <- mapM (\_ -> liftIO TTmp.newLabel) fs
+                                                     (funlvls,formalsWithOffsetss) <- liftM unzip $ mapM (\paramTys -> liftIO $ TTran.newLevel level paramTys) paramTyss
+                                                     let fundecs = zipWith4 funDecZipper funlvls funlabels paramTyss resultTys
+                                                     let funsymboldecpair = zip namesymbols fundecs
+                                                     let venv' = foldr insert' venv funsymboldecpair
+                                                     withBinding venv' tenv (mapM_ (uncurry4 checkBody) (zip4 fs formalsWithOffsetss funlvls funlabels))
+                                                     return (venv', tenv, [])
+                                                  where uncurry4 fun (a, b, c, d) = fun a b c d
+                                                        maybeResSymToTy _    Nothing  = return TSTy.Unit
+                                                        maybeResSymToTy tenv (Just (s, pos)) = do if s `Map.member` tenv
+                                                                                                     then return $ fromJust $ Map.lookup s tenv
+                                                                                                     else throwError $ SE(pos, undefinedFuncRetType $ TSym.name s)
+                                                        funDecZipper funlvl funlab paramTys resultTy = FunEntry{funLevel=funlvl
+                                                                                                               ,funLabel=funlab
+                                                                                                               ,funFormals=paramTys
+                                                                                                               ,funResult=resultTy}
+                                                        insert' (k, v) = Map.insert k v
+                                                        varEntryZipper ty (_, access) = VarEntry{varAccess=access, varTy=ty, varReadOnly=False}
+                                                        checkBody TAbsyn.Fundec{TAbsyn.fundecName=namesym
+                                                                               ,TAbsyn.fundecParams=tfields
+                                                                               ,TAbsyn.fundecResult=mayberes
+                                                                               ,TAbsyn.fundecBody=bexp
+                                                                               ,TAbsyn.fundecPos=pos}
+                                                                  formalsWithOffsets
+                                                                  funlvl
+                                                                  funlab
+                                                          = do (v, t, _, _) <- get
+                                                               let paramnamesymbols = map TAbsyn.tfieldName tfields
+                                                               paramTys <- mapM (tfieldToTy t) tfields
+                                                               let varentries = zipWith varEntryZipper paramTys formalsWithOffsets
+                                                               let varNameEntryPairs = zip paramnamesymbols varentries
+                                                               let v' = foldr insert' v varNameEntryPairs
+                                                               (bodyge, bodyTy) <- withBinding v' t $ transExp funlvl breakLab bexp
+                                                               case mayberes of
+                                                                 Nothing -> if (bodyTy == TSTy.Unit) 
+                                                                               then liftIO $ TTran.createProcFrag funlab funlvl bodyge
+                                                                               else throwError $ SE(pos, procedureHasNonUnitRetType $ TSym.name namesym)
+                                                                 Just (rettysym, rettypos) -> case Map.lookup rettysym t of
+                                                                                                 Just retty -> do actualretty <- actualTy pos retty
+                                                                                                                  if actualretty == bodyTy 
+                                                                                                                     then liftIO $ TTran.createProcFrag funlab funlvl bodyge
+                                                                                                                     else throwError $ SE(pos, functionRetBodyTypeMismatch $ TSym.name namesym)
+                                                                                                 Nothing -> throwError $ SE(rettypos, undefinedFuncRetType $ TSym.name namesym)
+                                                        tfieldToTy tenv (TAbsyn.Tfield {TAbsyn.tfieldName=_
+                                                                                       ,TAbsyn.tfieldTyp=s
+                                                                                       ,TAbsyn.tfieldPos=pos}) = do if s `Map.member` tenv
+                                                                                                                       then return $ fromJust $ Map.lookup s tenv
+                                                                                                                       else throwError $ SE(pos, undefinedFuncParamType)
 -- Variable declaration
-transDec TAbsyn.VarDec{TAbsyn.varDecVar=vardec
-                      ,TAbsyn.varDecTyp=maybetype
-                      ,TAbsyn.varDecInit=initexp
-                      ,TAbsyn.varDecPos=pos} = do initty <- transExp initexp
-                                                  let variablenamesym = TAbsyn.vardecName vardec
-                                                  (v, t, _, _) <- get
-                                                  case maybetype of
-                                                    Nothing -> do let v' = Map.insert variablenamesym VarEntry{varTy=initty, varReadOnly=False} v
-                                                                  return (v', t)
-                                                    Just (varty, varpos) -> case Map.lookup varty t of
-                                                                              Nothing -> throwError $ SE(varpos, undefinedVarDecType $ TSym.name varty)
-                                                                              Just ty -> do actualty <- actualTy pos ty
-                                                                                            if (actualty == initty)
-                                                                                               then do let v' = Map.insert variablenamesym VarEntry{varTy=initty, varReadOnly=False} v
-                                                                                                       return (v', t)
-                                                                                               else throwError $ SE(pos, variableInitDeclaredTypeMismatch $ TSym.name variablenamesym)
+transDec level breakLab TAbsyn.VarDec{TAbsyn.varDecVar=vardec
+                                     ,TAbsyn.varDecTyp=maybetype
+                                     ,TAbsyn.varDecInit=initexp
+                                     ,TAbsyn.varDecPos=pos} = 
+  do (initge, initty) <- transExp level breakLab initexp
+     let variablenamesym = TAbsyn.vardecName vardec
+     (v, t, _, _) <- get
+     access <- liftIO $ TTran.allocInFrame level
+     let varentry = VarEntry{varAccess=access, varTy=initty, varReadOnly=False}
+     let assigngexp = TTran.assign (TTran.simpleVar access level) initge
+     case maybetype of
+       Nothing -> do let v' = Map.insert variablenamesym varentry v
+                     return (v', t, [assigngexp])
+       Just (varty, varpos) -> case Map.lookup varty t of
+                                 Nothing -> throwError $ SE(varpos, undefinedVarDecType $ TSym.name varty)
+                                 Just ty -> do actualty <- actualTy pos ty
+                                               if (actualty == initty)
+                                                  then do let v' = Map.insert variablenamesym varentry v
+                                                          return (v', t, [assigngexp])
+                                                  else throwError $ SE(pos, variableInitDeclaredTypeMismatch $ TSym.name variablenamesym)
 -- Type declaration
-transDec (TAbsyn.TypeDec decs) = do (v, t, _, _) <- get
-                                    let typenames = map TAbsyn.typedecName decs
-                                    let typeposes = map TAbsyn.typedecPos decs
-                                    mapM_ checkTypeName $ zip typenames typeposes
-                                    refNothings <- mapM (\_ -> liftIO $ newIORef Nothing) decs
-                                    let tempNameTypes = zipWith (\namesym -> \refnothing -> TigSTy.Name(namesym, refnothing)) typenames refNothings
-                                    let t' = foldr (insert') t (zip typenames tempNameTypes)
-                                    let absyntys = map TAbsyn.typedecTy decs
-                                    tys <- mapM (withBinding v t' . transTy) absyntys
-                                    mapM_ rewriteRefNothing $ zip refNothings tys
-                                    return (v, t')
-                                 where insert' (k, v)= Map.insert k v
-                                       rewriteRefNothing (refNothing, ty) = liftIO $ writeIORef refNothing $ Just ty
-                                       checkTypeName (typename, pos) = do (_, t, _, _) <- get
-                                                                          if typename `Map.member` t
-                                                                             then throwError $ SE(pos, redefiningType $ TSym.name typename)
-                                                                             else return ()
+transDec _ _ (TAbsyn.TypeDec decs) = 
+  do (v, t, _, _) <- get
+     let typenames = map TAbsyn.typedecName decs
+     let typeposes = map TAbsyn.typedecPos decs
+     mapM_ checkTypeName $ zip typenames typeposes
+     refNothings <- mapM (\_ -> liftIO $ newIORef Nothing) decs
+     let tempNameTypes = zipWith (\namesym -> \refnothing -> TSTy.Name(namesym, refnothing)) typenames refNothings
+     let t' = foldr (insert') t (zip typenames tempNameTypes)
+     let absyntys = map TAbsyn.typedecTy decs
+     tys <- mapM (withBinding v t' . transTy) absyntys
+     mapM_ rewriteRefNothing $ zip refNothings tys
+     return (v, t', [])
+   where insert' (k, v)= Map.insert k v
+         rewriteRefNothing (refNothing, ty) = liftIO $ writeIORef refNothing $ Just ty
+         checkTypeName (typename, pos) = do (_, t, _, _) <- get
+                                            if typename `Map.member` t
+                                               then throwError $ SE(pos, redefiningType $ TSym.name typename)
+                                               else return ()
 
-transTy :: TAbsyn.Ty -> SementState TigSTy.Ty
+transTy :: TAbsyn.Ty -> SementState TSTy.Ty
 transTy (TAbsyn.NameTy(namesymbol, pos)) = do (_, t, _, _) <- get
                                               case Map.lookup namesymbol t of
                                                 Nothing -> throwError $ SE(pos, undefinedTypeInNameTy $ TSym.name namesymbol)
@@ -391,7 +433,7 @@ transTy (TAbsyn.ArrayTy(namesymbol, pos)) = do (_, t, _, _) <- get
                                                case Map.lookup namesymbol t of
                                                  Nothing -> throwError $ SE(pos, undefinedTypeInArrayTy $ TSym.name namesymbol)
                                                  Just ty -> do u <- genUnique
-                                                               return $ TigSTy.Array(ty, u)
+                                                               return $ TSTy.Array(ty, u)
 transTy (TAbsyn.RecordTy tfields) = do (_, t, _, _) <- get
                                        let names = map TAbsyn.tfieldName tfields
                                        let types = map TAbsyn.tfieldTyp  tfields
@@ -399,7 +441,7 @@ transTy (TAbsyn.RecordTy tfields) = do (_, t, _, _) <- get
                                        if all (checkExistence t) types
                                           then do let sementtys = map fromJust $ map (flip (Map.lookup) t) types
                                                   u <- genUnique
-                                                  return $ TigSTy.Record(zip names sementtys, u)
+                                                  return $ TSTy.Record(zip names sementtys, u)
                                           else do let (Just nonexistentty) = find (not . checkExistence t) types
                                                   let (Just idx) = nonexistentty `elemIndex` types
                                                   throwError $ SE(positions!!idx, undefinedTypeInRecordTy $ TSym.name (types!!idx))
@@ -407,18 +449,23 @@ transTy (TAbsyn.RecordTy tfields) = do (_, t, _, _) <- get
 
 
 
-transProg' :: SementStates -> TAbsyn.Program -> IO(Either SementError ())
-transProg' initialS (TAbsyn.Pexp e) = do errorOrTy <- runErrorT $ evalStateT (transExp e) initialS
+transProg' :: SementStates -> TAbsyn.Program -> IO(Either SementError [TTran.Frag])
+transProg' initialS (TAbsyn.Pexp e) = do (tigerMainLevel,_) <- liftIO $ TTran.newLevel TTran.outerMost []
+                                         errorOrTy <- runErrorT $ evalStateT (transExp tigerMainLevel Nothing e) initialS
                                          case errorOrTy of
                                            Left err -> return $ Left err
-                                           _        -> return $ Right ()
-transProg' initialS (TAbsyn.Pdecs (d:decs)) = do errorOrResSt <- runErrorT $ runStateT (transDec d) initialS
+                                           Right (ge, _) -> do liftIO $ TTran.createMainFrag tigerMainLevel ge
+                                                               frags <- liftIO $ TTran.getResult
+                                                               return $ Right frags
+transProg' initialS (TAbsyn.Pdecs (d:decs)) = do (tigerMainLevel,_) <- liftIO $ TTran.newLevel TTran.outerMost []
+                                                 errorOrResSt <- runErrorT $ runStateT (transDec tigerMainLevel Nothing d) initialS
                                                  case errorOrResSt of
                                                    Left err -> return $ Left err
                                                    Right (_, s) -> transProg' s (TAbsyn.Pdecs decs)
-transProg' _ (TAbsyn.Pdecs []) = return $ Right ()
+transProg' _ (TAbsyn.Pdecs []) = do frags <- liftIO $ TTran.getResult
+                                    return $ Right frags
 
-transProg :: TAbsyn.Program -> IO (Either SementError ())
+transProg :: TAbsyn.Program -> IO (Either SementError [TTran.Frag])
 transProg prog = do intsym       <- TSym.symbol "int"
                     stringsym    <- TSym.symbol "string"
                     printsym     <- TSym.symbol "print"
@@ -432,17 +479,17 @@ transProg prog = do intsym       <- TSym.symbol "int"
                     notsym       <- TSym.symbol "not"
                     exitsym      <- TSym.symbol "exit"
                     let insert' (sym, ty) = Map.insert sym ty
-                    let initialVenv = foldr insert' Map.empty [(printsym, FunEntry { funFormals=[TigSTy.String], funResult=TigSTy.Unit })
-                                                              ,(flushsym, FunEntry { funFormals=[], funResult=TigSTy.Unit })
-                                                              ,(getcharsym, FunEntry { funFormals=[], funResult=TigSTy.String })
-                                                              ,(ordsym, FunEntry { funFormals=[TigSTy.String], funResult=TigSTy.INT })
-                                                              ,(chrsym, FunEntry { funFormals=[TigSTy.INT], funResult=TigSTy.String })
-                                                              ,(sizesym, FunEntry { funFormals=[TigSTy.String], funResult=TigSTy.INT })
-                                                              ,(substringsym, FunEntry { funFormals=[TigSTy.String, TigSTy.INT, TigSTy.INT], funResult=TigSTy.String })
-                                                              ,(concatsym, FunEntry { funFormals=[TigSTy.String, TigSTy.String], funResult=TigSTy.String })
-                                                              ,(notsym, FunEntry { funFormals=[TigSTy.INT], funResult=TigSTy.INT })
-                                                              ,(exitsym, FunEntry { funFormals=[TigSTy.INT], funResult=TigSTy.Unit })]
-                    let initialTenv = foldr insert' Map.empty [(intsym, TigSTy.INT), 
-                                                               (stringsym, TigSTy.String)]
-                    let emptyState = (initialVenv, initialTenv, 0 :: TigSTy.Uniq, 0)
+                    let initialVenv = foldr insert' Map.empty [(printsym,     FunEntry { funFormals=[TSTy.String                     ] , funResult=TSTy.Unit   } )
+                                                              ,(flushsym,     FunEntry { funFormals=[                                ] , funResult=TSTy.Unit   } )
+                                                              ,(getcharsym,   FunEntry { funFormals=[                                ] , funResult=TSTy.String } )
+                                                              ,(ordsym,       FunEntry { funFormals=[TSTy.String                     ] , funResult=TSTy.INT    } )
+                                                              ,(chrsym,       FunEntry { funFormals=[TSTy.INT                        ] , funResult=TSTy.String } )
+                                                              ,(sizesym,      FunEntry { funFormals=[TSTy.String                     ] , funResult=TSTy.INT    } )
+                                                              ,(substringsym, FunEntry { funFormals=[TSTy.String, TSTy.INT, TSTy.INT ] , funResult=TSTy.String } )
+                                                              ,(concatsym,    FunEntry { funFormals=[TSTy.String, TSTy.String        ] , funResult=TSTy.String } )
+                                                              ,(notsym,       FunEntry { funFormals=[TSTy.INT                        ] , funResult=TSTy.INT    } )
+                                                              ,(exitsym,      FunEntry { funFormals=[TSTy.INT                        ] , funResult=TSTy.Unit   } ) ]
+                    let initialTenv = foldr insert' Map.empty [(intsym, TSTy.INT), 
+                                                               (stringsym, TSTy.String)]
+                    let emptyState = (initialVenv, initialTenv, 0 :: TSTy.Uniq, 0)
                     transProg' emptyState prog
