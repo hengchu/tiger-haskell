@@ -16,4 +16,4 @@ main = do args <- getArgs
                                  Right absyn -> do analysis <- TS.transProg absyn
                                                    case analysis of
                                                      Left sementerr -> print sementerr
-                                                     Right _ -> print "Sementic analysis complete."
+                                                     Right frags -> mapM_ print frags
