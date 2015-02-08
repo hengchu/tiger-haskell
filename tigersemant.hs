@@ -1,10 +1,10 @@
-module TigerSement
+module TigerSemant
        (
          transProg
-       , SementError
+       , SemantError
        ) where
 
-import qualified TigerSementTypes as TSTy
+import qualified TigerSemantTypes as TSTy
 import qualified TigerLexer       as TLex
 import qualified TigerAbsyn       as TAbsyn
 import qualified TigerSymbol      as TSym
@@ -17,7 +17,7 @@ import Control.Monad.Except
 import Data.IORef
 import Data.List
 
-data SementError = SE (TLex.AlexPosn, String) deriving (Show, Eq)
+data SemantError = SE (TLex.AlexPosn, String) deriving (Show, Eq)
 type ExpTy = (TTran.Gexp, TSTy.Ty)
 
 data EnvEntry = VarEntry {varAccess :: TTran.Access, varTy::TSTy.Ty, varReadOnly::Bool}
@@ -26,9 +26,9 @@ data EnvEntry = VarEntry {varAccess :: TTran.Access, varTy::TSTy.Ty, varReadOnly
 type Venv    = Map.Map TSym.Symbol EnvEntry
 type Tenv    = Map.Map TSym.Symbol TSTy.Ty
 type LoopLevel = Int
-type SementStates = (Venv, Tenv, TSTy.Uniq, LoopLevel)
+type SemantStates = (Venv, Tenv, TSTy.Uniq, LoopLevel)
 
-type SementState = StateT SementStates (ExceptT SementError IO)
+type SemantState = StateT SemantStates (ExceptT SemantError IO)
 
 binOpNonMatchingError                   = "Binary operation on non-matching types"
 binNilOp                                = "Binary operation on two nil types"
@@ -73,12 +73,12 @@ parameterTypesDoesNotMatchFunctionTypes = "Parameter types does not match functi
 nonOrdCmpOnStr                          = "Non order comparison operator on string"
 
 -- Generates a new value of Uniq type
-genUnique :: SementState TSTy.Uniq
+genUnique :: SemantState TSTy.Uniq
 genUnique = do (venv, tenv, a, inloop) <- get
                put (venv, tenv, a+1, inloop)
                return a
 
-actualTy' :: TLex.AlexPosn -> TSTy.Ty -> [TSTy.Ty] -> SementState TSTy.Ty
+actualTy' :: TLex.AlexPosn -> TSTy.Ty -> [TSTy.Ty] -> SemantState TSTy.Ty
 actualTy' pos a@(TSTy.Name (_, iorefmaybety)) searched = do if a `elem` searched
                                                                  then throwError $ SE(pos, circularType ++ ": "  ++ (show a))
                                                                  else do maybety <- liftIO $ readIORef iorefmaybety
@@ -89,7 +89,7 @@ actualTy' pos otherType searched = if (otherType `elem` searched)
                                       then throwError $ SE(pos, circularType ++ ": " ++ (show otherType))
                                       else return otherType
 
-actualTy :: TLex.AlexPosn -> TSTy.Ty -> SementState TSTy.Ty
+actualTy :: TLex.AlexPosn -> TSTy.Ty -> SemantState TSTy.Ty
 actualTy pos a = actualTy' pos a []
 
 isRecord (TSTy.Record _) = True
@@ -98,22 +98,22 @@ isRecord _ = False
 isArray (TSTy.Array _) = True
 isArray _ = False
 
-enterLoop :: SementState ()
+enterLoop :: SemantState ()
 enterLoop = do (venv, tenv, uniq, looplevel) <- get
                put (venv, tenv, uniq, looplevel+1)
 
-exitLoop :: SementState ()
+exitLoop :: SemantState ()
 exitLoop = do (venv, tenv, uniq, looplevel) <- get
               put (venv, tenv, uniq, looplevel-1)
 
-withBinding :: Venv -> Tenv -> SementState a -> SementState a
+withBinding :: Venv -> Tenv -> SemantState a -> SemantState a
 withBinding venv tenv checker = do s@(_, _, uniq, looplevel) <- get
                                    put (venv, tenv, uniq, looplevel)
                                    a <- checker
                                    put s
                                    return a
 
-transVar :: TTran.Level -> Maybe TTmp.Label -> TAbsyn.Var -> SementState ExpTy
+transVar :: TTran.Level -> Maybe TTmp.Label -> TAbsyn.Var -> SemantState ExpTy
 transVar level _ (TAbsyn.SimpleVar(s, pos)) = do (v, _, _, _) <- get
                                                  case Map.lookup s v of
                                                    Nothing                                -> throwError $ SE(pos, variableUndefined $ TSym.name s)
@@ -143,7 +143,7 @@ transVar level breakLab (TAbsyn.SubscriptVar(var, idxexp, pos)) = do (ge, varty)
                                                                         else throwError $ SE(pos, subscriptVarOnNonArrayType)
 
 
-transExp :: TTran.Level -> Maybe TTmp.Label -> TAbsyn.Exp -> SementState ExpTy
+transExp :: TTran.Level -> Maybe TTmp.Label -> TAbsyn.Exp -> SemantState ExpTy
 -- Binary Operation
 transExp level breakLab TAbsyn.OpExp{TAbsyn.opLeft=el, TAbsyn.opOper=op, TAbsyn.opRight=er, TAbsyn.opPos=pos}
   = do (gel, tl) <- transExp level breakLab el
@@ -339,7 +339,7 @@ transExp level breakLab TAbsyn.RecordExp{TAbsyn.recordFields=efields, TAbsyn.rec
                                                        else throwError $ SE(pos, recSymbolMisMatch)
                                         
 
-transDec :: TTran.Level -> Maybe TTmp.Label -> TAbsyn.Dec -> SementState (Venv, Tenv, [TTran.Gexp])
+transDec :: TTran.Level -> Maybe TTmp.Label -> TAbsyn.Dec -> SemantState (Venv, Tenv, [TTran.Gexp])
 -- Function declaration
 transDec level breakLab (TAbsyn.FunctionDec fs) = do let namesymbols = map TAbsyn.fundecName fs
                                                      let paramfields = map TAbsyn.fundecParams fs
@@ -437,7 +437,7 @@ transDec _ _ (TAbsyn.TypeDec decs) =
                                                then throwError $ SE(pos, redefiningType $ TSym.name typename)
                                                else return ()
 
-transTy :: TAbsyn.Ty -> SementState TSTy.Ty
+transTy :: TAbsyn.Ty -> SemantState TSTy.Ty
 transTy (TAbsyn.NameTy(namesymbol, pos)) = do (_, t, _, _) <- get
                                               case Map.lookup namesymbol t of
                                                 Nothing -> throwError $ SE(pos, undefinedTypeInNameTy $ TSym.name namesymbol)
@@ -462,7 +462,7 @@ transTy (TAbsyn.RecordTy tfields) = do (_, t, _, _) <- get
 
 
 
-transProg' :: SementStates -> TAbsyn.Program -> IO(Either SementError [TTran.Frag])
+transProg' :: SemantStates -> TAbsyn.Program -> IO(Either SemantError [TTran.Frag])
 transProg' initialS (TAbsyn.Pexp e) = do (tigerMainLevel,_) <- liftIO $ TTran.newLevel TTran.outerMost []
                                          errorOrTy <- runExceptT $ evalStateT (transExp tigerMainLevel Nothing e) initialS
                                          case errorOrTy of
@@ -478,7 +478,7 @@ transProg' initialS (TAbsyn.Pdecs (d:decs)) = do (tigerMainLevel,_) <- liftIO $ 
 transProg' _ (TAbsyn.Pdecs []) = do frags <- liftIO $ TTran.getResult
                                     return $ Right frags
 
-transProg :: TAbsyn.Program -> IO (Either SementError [TTran.Frag])
+transProg :: TAbsyn.Program -> IO (Either SemantError [TTran.Frag])
 transProg prog = do intsym       <- TSym.symbol "int"
                     stringsym    <- TSym.symbol "string"
                     printsym     <- TSym.symbol "print"

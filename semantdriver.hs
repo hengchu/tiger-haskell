@@ -1,4 +1,4 @@
-import qualified TigerSement as TS
+import qualified TigerSemant as TS
 import qualified TigerLexer  as TLex
 import qualified TigerParser as TP
 import System.Environment
@@ -15,5 +15,5 @@ main = do args <- getArgs
                                  Left parseError -> print parseError
                                  Right absyn -> do analysis <- TS.transProg absyn
                                                    case analysis of
-                                                     Left sementerr -> print sementerr
+                                                     Left semanterr -> print semanterr
                                                      Right frags -> mapM_ print frags

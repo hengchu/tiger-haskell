@@ -1,7 +1,7 @@
 COMP=ghc
 LEX=alex
 
-all : lexerdriver parserdriver sementdriver
+all : lexerdriver parserdriver semantdriver
 
 lexerdriver : lexerdriver.hs tigerlexer.hs
 	$(COMP) lexerdriver
@@ -9,11 +9,11 @@ lexerdriver : lexerdriver.hs tigerlexer.hs
 parserdriver : parserdriver.hs tigerlexer.hs
 	$(COMP) parserdriver
 
-sementdriver : sementdriver.hs tigerlexer.hs
-	$(COMP) sementdriver
+semantdriver : semantdriver.hs tigerlexer.hs
+	$(COMP) semantdriver
 
 tigerlexer.hs : tigerlexer.x
 	$(LEX) -g tigerlexer.x
 
 clean :
-	rm -f *.o *.hi tigerlexer.hs lexerdriver parserdriver sementdriver
+	rm -f *.o *.hi tigerlexer.hs lexerdriver parserdriver semantdriver
