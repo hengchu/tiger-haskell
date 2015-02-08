@@ -19,12 +19,20 @@ data Frame  = Frame { frameFormals     :: Int
                      ,frameLocalCount  :: IORef Int -- Count of local variables in frame
                     }
                     deriving (Eq)
+
+instance Show Frame where
+  show _ = "<frame>"
+
 data Frag = PROC { procName  :: Temp.Label
                  , procBody  :: Tree.Stm
                  , procFrame :: Frame }
           | DATA { dataLab :: Temp.Label
                  , dataStr :: String }
           deriving (Eq)
+
+instance Show Frag where
+  show (DATA {dataLab=lab, dataStr=str}) = "dataLab: " ++ show lab ++ "\n" ++ str
+  show (PROC {procName=name, procBody=body}) = "procName: " ++ show name ++ "\n" ++ show body
 
 newFrame :: Int -> IO (Frame, [Offset])
 newFrame numFormals = 
