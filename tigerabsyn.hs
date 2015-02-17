@@ -15,7 +15,7 @@ module TigerAbsyn
   ) where
 
 import TigerLexer
-import qualified TigerSymbol as S
+import qualified TigerSymbol2 as S
 
 data Program = Pexp Exp
              | Pdecs [Dec]
@@ -27,8 +27,8 @@ data Var = SimpleVar (S.Symbol, AlexPosn)
            deriving (Show, Eq)
 
 data Exp = VarExp Var
-         | NilExp
-         | IntExp Int
+         | NilExp     AlexPosn
+         | IntExp     (Int, AlexPosn)
          | StringExp  (String, AlexPosn)
          | SeqExp     [(Exp, AlexPosn)]
          | AppExp     { appFunc::S.Symbol, appArgs::[Exp], appPos::AlexPosn                    }
