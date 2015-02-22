@@ -2,10 +2,11 @@ module TigerParser2
   (
     token2ptoken
   , parser
+  , Position(..)
   )
   where
 
-import FrontEnd
+import qualified FrontEnd as Frt
 import TigerLexer
 import TigerAbsyn
 import Prelude hiding (EQ, LT, GT)
@@ -18,8 +19,8 @@ import Control.Monad
 class Position a where
   extractPosition :: a -> AlexPosn
 
-instance Position PToken where
-  extractPosition (PToken pos _) = pos
+instance Position Frt.PToken where
+  extractPosition (Frt.PToken pos _) = pos
 
 instance Position Var where
   extractPosition (SimpleVar(_, pos))       = pos
@@ -67,31 +68,31 @@ instance Position Dec where
   extractPosition (TypeDec (t:_)) = extractPosition t
   
 
-token2ptoken :: Token -> PToken
-token2ptoken (Token pos tc _ ) = PToken pos tc
+token2ptoken :: Token -> Frt.PToken
+token2ptoken (Token pos tc _ ) = Frt.PToken pos tc
 
-updatePos :: SourcePos -> PToken -> [PToken] -> SourcePos
-updatePos pos (PToken (AlexPn _ line col) _) _ = 
+updatePos :: SourcePos -> Frt.PToken -> [Frt.PToken] -> SourcePos
+updatePos pos (Frt.PToken (AlexPn _ line col) _) _ = 
   setSourceLine (setSourceColumn pos col) line
 
-parseSimpleToken :: TokenClass -> Frontend PToken
+parseSimpleToken :: TokenClass -> Frt.Frontend Frt.PToken
 parseSimpleToken tc = tokenPrim show updatePos acceptTok
-  where acceptTok t@(PToken _ c) | tc == c = Just t
+  where acceptTok t@(Frt.PToken _ c) | tc == c = Just t
                                  | otherwise = Nothing
 
-parseId :: Frontend (PToken, String)
+parseId :: Frt.Frontend (Frt.PToken, String)
 parseId = tokenPrim show updatePos acceptTok
-  where acceptTok idtok@(PToken _ (Id name)) = Just (idtok, name)
+  where acceptTok idtok@(Frt.PToken _ (Id name)) = Just (idtok, name)
         acceptTok _                       = Nothing
 
-parseNumber :: Frontend (PToken, Int)
+parseNumber :: Frt.Frontend (Frt.PToken, Int)
 parseNumber = tokenPrim show updatePos acceptTok
-  where acceptTok num@(PToken _ (Number val)) = Just (num, val)
+  where acceptTok num@(Frt.PToken _ (Number val)) = Just (num, val)
         acceptTok _                           = Nothing
 
-parseString :: Frontend (PToken, String)
+parseString :: Frt.Frontend (Frt.PToken, String)
 parseString = tokenPrim show updatePos acceptTok
-  where acceptTok str@(PToken _ (Str s)) = Just (str, s)
+  where acceptTok str@(Frt.PToken _ (Str s)) = Just (str, s)
         acceptTok _                      = Nothing
 
 negateOp pos a = OpExp { opLeft = IntExp (0, pos)

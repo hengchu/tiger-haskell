@@ -4,17 +4,7 @@ module TigerSemantTypes
        , Uniq
        ) where
 
-import qualified TigerSymbol as S
-import Data.IORef
-
-type Uniq = Integer
-data Ty = Record ([(S.Symbol, Ty)], Uniq)
-        | Nil
-        | INT
-        | String
-        | Array (Ty, Uniq)
-        | Name (S.Symbol, IORef (Maybe Ty))
-        | Unit
+import FrontEnd
 
 instance Show Ty where
   show (Record (xs, u)) = "Record: (" ++ show xs ++ " )"
