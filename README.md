@@ -11,5 +11,5 @@ I am very new to Haskell and I probably make a lot of mistakes. If you spot
 anything bad, please let me know! I would greatly appreciate it!
 
 # Current progress
-The sementic analyzer is completed. You should be able to compile it 
-with `make sementdriver`, and run it on tiger files.
+Re-implementing everything from Frontend to IR translation to get rid
+of `unsafePerformIO` hacks. Temporarily unbuildable.
