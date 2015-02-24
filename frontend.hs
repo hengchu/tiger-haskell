@@ -44,7 +44,10 @@ import qualified Data.Map as Map
 import qualified TigerLexer as TLex
 import Distribution.Simple.Utils (lowercase)
 
+-- This is a uniq number generator for the entire frontend.
 type Uniq = Integer
+
+-- These are the semantic types of tiger langauge. Used during type checking.
 data Ty = Record ([(Symbol, Ty)], Uniq)
         | Nil
         | INT
@@ -53,15 +56,7 @@ data Ty = Record ([(Symbol, Ty)], Uniq)
         | Name (Symbol, IORef (Maybe Ty))
         | Unit
 
-type Access = (Level, Int)
-
-data Level = LEVEL { levelFrame :: Frame
-                   , staticLinkOffset :: Int
-                   , levelParent :: Level
-                   , levelUniq :: Uniq }
-           | TOP
-           deriving (Eq)
-
+-- These are the entries of the environment mappings during type checking.
 data EnvEntry = VarEntry { varAccess :: Access
                          , varTy::Ty
                          , varReadOnly::Bool }
@@ -70,9 +65,11 @@ data EnvEntry = VarEntry { varAccess :: Access
                          , funFormals::[(Ty, Access)]
                          , funResult::Ty}
 
-
+-- Environment mappings.
 type Venv = Map.Map Symbol EnvEntry
 type Tenv = Map.Map Symbol Ty
+
+-- One of the state types for semant. It is used to track how many nested loops we're currently in.
 type LoopLevel = Int
 
 type SemantState = ( Venv   -- ^ variable map
@@ -81,22 +78,35 @@ type SemantState = ( Venv   -- ^ variable map
                    , [Frag] -- ^ frag list
                    ) 
 
+-- Types of errors semant can generate.
 data SemantErrorClass = TypeMismatch String String
                       | TypeLoop     [String]
                       | NotCallable  String
+                      | UndefinedBinop String String
                       | Undefined    String
+                      | ArgumentCount Int Int
+                      | ArgumentName String String
   deriving(Show, Eq)
+
+-- The actual error type.
 data SemantError = SE TLex.AlexPosn SemantErrorClass
   deriving(Show, Eq)
+
+-- The semant monad.
 type Semant = StateT SemantState (ExceptT SemantError IO)
 
+-- Simplified token type for the parser.
 data PToken = PToken TLex.AlexPosn TLex.TokenClass
   deriving(Show, Eq)
+
+-- All the states we need to track for the symbol module.
 type SymbolTempState = ( Map.Map String Int -- ^ Map from string to symbol num
                        , Int                -- ^ Symbol Count
                        , Int                -- ^ Temp Count
                        , Int                -- ^ Label Count
                        , Integer )          -- ^ Uniq Gen
+
+-- The Frontend monad.
 type Frontend = ParsecT [PToken] SymbolTempState Semant
 
 -- Symbol type
@@ -114,7 +124,16 @@ instance Show Temp where
 type Label = Symbol
 -- end of Temp types
 
--- Frame types
+-- Frame/Translate types
+type Access = (Level, Int)
+
+data Level = LEVEL { levelFrame :: Frame
+                   , staticLinkOffset :: Int
+                   , levelParent :: Level
+                   , levelUniq :: Uniq }
+           | TOP
+           deriving (Eq)
+
 type Offset = Int
 data Frame  = Frame { frameFormals     :: Int
                      ,frameOfflist     :: [Offset]
