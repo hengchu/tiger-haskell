@@ -15,7 +15,7 @@ module TigerAbsyn
   ) where
 
 import TigerLexer
-import qualified TigerSymbol2 as S
+import qualified TigerSymbol as S
 
 data Program = Pexp Exp
              | Pdecs [Dec]

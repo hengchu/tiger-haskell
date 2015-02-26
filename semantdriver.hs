@@ -1,6 +1,6 @@
-import qualified TigerSemant2 as TS
+import qualified TigerSemant as TS
 import qualified TigerLexer  as TLex
-import qualified TigerParser2 as TP
+import qualified TigerParser as TP
 import Text.Parsec
 import qualified FrontEnd as Frt
 import Control.Monad.State

@@ -10,29 +10,7 @@ module TigerFrame
        where
 
 import Data.IORef
-import qualified TigerITree as Tree
-import qualified TigerTemp  as Temp
-
-type Offset = Int
-data Frame  = Frame { frameFormals     :: Int
-                     ,frameOfflist     :: [Offset]
-                     ,frameLocalCount  :: IORef Int -- Count of local variables in frame
-                    }
-                    deriving (Eq)
-
-instance Show Frame where
-  show _ = "<frame>"
-
-data Frag = PROC { procName  :: Temp.Label
-                 , procBody  :: Tree.Stm
-                 , procFrame :: Frame }
-          | DATA { dataLab :: Temp.Label
-                 , dataStr :: String }
-          deriving (Eq)
-
-instance Show Frag where
-  show (DATA {dataLab=lab, dataStr=str}) = "dataLab: " ++ show lab ++ "\n" ++ str
-  show (PROC {procName=name, procBody=body}) = "procName: " ++ show name ++ "\n" ++ show body
+import FrontEnd
 
 newFrame :: Int -> IO (Frame, [Offset])
 newFrame numFormals = 
@@ -51,5 +29,5 @@ allocLocalInFrame Frame { frameLocalCount=locals } =
      writeIORef locals (c+1)
      return $ c * (-4)
 
-exp :: Int -> Tree.Exp -> Tree.Exp
-exp offset frameLocation = Tree.MEM(Tree.BINOP(Tree.PLUS, frameLocation, Tree.CONST offset), 4)
+exp :: Int -> Exp -> Exp
+exp offset frameLocation = MEM(BINOP(PLUS, frameLocation, CONST offset), 4)

@@ -1,29 +1,23 @@
 module TigerSymbol
   (
-    SymbolMap
-  , Symbol
-  , symbol
+    symbol
   , name
-  ) where
+  , Symbol
+  )
+  where
 
-import qualified Data.Map.Strict as Map
-import System.IO.Unsafe
-import Data.IORef
+import Text.Parsec
+import qualified Data.Map as Map
 
-type Symbol = (String, Int)
-type SymbolMap = Map.Map String Int
+import FrontEnd
 
-symbolState :: IORef (SymbolMap, Int)
-{-# NOINLINE symbolState #-}
-symbolState = unsafePerformIO $ newIORef (Map.empty, 0)
-
-symbol :: String -> IO Symbol
-symbol str = do (m, c) <- readIORef symbolState
+symbol :: String -> Frontend Symbol
+symbol str = do (m, c, tc, lc, u) <- getState
                 case Map.lookup str m of
+                  Just c' -> return $ (str, c')
                   Nothing -> do let m' = Map.insert str c m
-                                writeIORef symbolState (m', c+1)
-                                return (str, c)
-                  Just c' -> return (str, c')
+                                putState (m', c+1, tc, lc, u)
+                                return $ (str, c)
 
 name :: Symbol -> String
 name (str, _) = str

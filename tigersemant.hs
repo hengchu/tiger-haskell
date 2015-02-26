@@ -1,540 +1,496 @@
 module TigerSemant
-       (
-         transProg
-       , SemantError
-       ) where
+  (
+    transprog
+  )
+  where
 
-import qualified TigerSemantTypes as TSTy
+import qualified TigerSemantTypes as TSty
 import qualified TigerLexer       as TLex
-import qualified TigerAbsyn       as TAbsyn
+import qualified TigerAbsyn       as TAbs
 import qualified TigerSymbol      as TSym
 import qualified TigerTemp        as TTmp
-import qualified TigerTranslate   as TTran
+import qualified TigerTranslate   as TTra
+import qualified FrontEnd         as Frt
 import qualified Data.Map         as Map
-import Data.Maybe
-import Control.Monad.State.Strict
+import qualified TigerParser      as TPar
 import Control.Monad.Except
-import Data.IORef
+import Data.IORef.MonadIO
 import Data.List
+import Data.Maybe
 
-data SemantError = SE (TLex.AlexPosn, String) deriving (Show, Eq)
-type ExpTy = (TTran.Gexp, TSTy.Ty)
+type Frontend = Frt.Frontend
+type Venv = Frt.Venv
+type Tenv = Frt.Tenv
 
-data EnvEntry = VarEntry {varAccess :: TTran.Access, varTy::TSTy.Ty, varReadOnly::Bool}
-              | FunEntry {funLevel :: TTran.Level, funLabel :: TTmp.Label, funFormals::[(TSTy.Ty, TTran.Access)], funResult::TSTy.Ty}
+type GexpTy = (TTra.Gexp, TSty.Ty)
 
-type Venv    = Map.Map TSym.Symbol EnvEntry
-type Tenv    = Map.Map TSym.Symbol TSTy.Ty
-type LoopLevel = Int
-type SemantStates = (Venv, Tenv, TSTy.Uniq, LoopLevel)
+cyclicTypeError :: TLex.AlexPosn -> [String] -> Frt.SemantError
+cyclicTypeError pos types = Frt.SE pos $ Frt.TypeLoop types
 
-type SemantState = StateT SemantStates (ExceptT SemantError IO)
+notCallableError :: TLex.AlexPosn -> String -> Frt.SemantError
+notCallableError pos str = Frt.SE pos $ Frt.NotCallable str
 
-binOpNonMatchingError                   = "Binary operation on non-matching types"
-binNilOp                                = "Binary operation on two nil types"
-binUnitOp                               = "Binary operation on two unit types"
-arrayRecOrderOp                         = "Order comparison operation on array or record type"
-undefinedFuncError name                 = "Calling undefined function: " ++ name
-undefinedRecError  name                 = "Creating undefined record type: " ++ name
-recSymbolMisMatch                       = "Symbol mismatch when creating record"
-recTypeMisMatch                         = "Type mismatch when creating record"
-illegalRecType name                     = "Attempting to create record with non-record type: " ++ name
-assignmentTypeMismatch                  = "Attempting to assign mismatching type to variable"
-illegalIfTestType                       = "If expression has non-int test type"
-ifthenTypeMismatch                      = "If expression then branch and else branch have different types"
-illegalWhileTestType                    = "While expression has non-int test type"
-whileLoopBodyUnit                       = "While expression should have unit typed body"
-forLoopBoundaryType                     = "For loop has non-int low or high type"
-forLoopBodyUnit                         = "For loop should have unit typed body"
-breakExpNotInLoop                       = "Break expression not in any loop"
-undefinedArrError name                  = "Creating array for undefined type: " ++ name
-nonarrayCreation  name                  = "Attempting to create array for non-array type: " ++ name
-arrayInitMismatch                       = "Array initialization expression does not match actual type"
-arraySizeNotInt                         = "Array size expression is not int-typed"
-undefinedFuncRetType name               = "Undefined function return type: " ++ name
-undefinedFuncParamType                  = "Undefined function parameter type(s)"
-procedureHasNonUnitRetType name         = "Procedure: " ++ name ++ " has non-unit return type"
-functionRetBodyTypeMismatch name        = "Function: " ++ name ++ " return type does not match body expression type"
-undefinedVarDecType name                = "Declared variable type: " ++ name ++ " is not defined"
-variableInitDeclaredTypeMismatch name   = "Variable: " ++ name ++ " init expression type does not match declared type"
-undefinedTypeInNameTy name              = "Undefined type: " ++ name ++ " in name type declaration"
-undefinedTypeInArrayTy name             = "Undefined type: " ++ name ++ " in array type declaration"
-undefinedTypeInRecordTy name            = "Undefined type: " ++ name ++ " in record type declaration"
-variableUndefined name                  = "Variable is not in scope: " ++ name
-nameIsNotVariable name                  = name ++ " is not a variable"
-fieldVarOnNonRecordType name            = "Trying to access field: " ++ name ++ " on non record type"
-recordTypeHasNoField name               = "Record type does not have field: " ++ name
-subscriptVarOnNonArrayType              = "Trying to subscript non-array type"
-subscriptIsNotIntType                   = "Subscript is not int-typed"
-circularType                            = "Circular type discovered!"
-redefiningType name                     = "Redefining type: " ++ name
-variableIsNotFunction name              = "Variable is not function: " ++ name
-parameterTypesDoesNotMatchFunctionTypes = "Parameter types does not match function declared types"
-nonOrdCmpOnStr                          = "Non order comparison operator on string"
+typeMisMatchError :: TLex.AlexPosn -> String -> String -> Frt.SemantError
+typeMisMatchError pos str1 str2 = Frt.SE pos $ Frt.TypeMismatch str1 str2
 
--- Generates a new value of Uniq type
-genUnique :: SemantState TSTy.Uniq
-genUnique = do (venv, tenv, a, inloop) <- get
-               put (venv, tenv, a+1, inloop)
-               return a
+argumentNameError :: TLex.AlexPosn -> String -> String -> Frt.SemantError
+argumentNameError pos str1 str2 = Frt.SE pos $ Frt.ArgumentName str1 str2
 
-actualTy' :: TLex.AlexPosn -> TSTy.Ty -> [TSTy.Ty] -> SemantState TSTy.Ty
-actualTy' pos a@(TSTy.Name (_, iorefmaybety)) searched = do if a `elem` searched
-                                                                 then throwError $ SE(pos, circularType ++ ": "  ++ (show a))
-                                                                 else do maybety <- liftIO $ readIORef iorefmaybety
-                                                                         case maybety of
-                                                                           (Just ty) -> actualTy' pos ty (a:searched)
-                                                                           Nothing -> error "Impossible name type"
-actualTy' pos otherType searched = if (otherType `elem` searched) 
-                                      then throwError $ SE(pos, circularType ++ ": " ++ (show otherType))
-                                      else return otherType
+undefinedBinop :: TLex.AlexPosn -> String -> String -> Frt.SemantError
+undefinedBinop pos str1 str2 = Frt.SE pos $ Frt.UndefinedBinop str1 str2
 
-actualTy :: TLex.AlexPosn -> TSTy.Ty -> SemantState TSTy.Ty
-actualTy pos a = actualTy' pos a []
+undefinedError :: TLex.AlexPosn -> String -> Frt.SemantError
+undefinedError pos str = Frt.SE pos $ Frt.Undefined str
 
-isRecord (TSTy.Record _) = True
-isRecord _ = False
+argumentCountError :: TLex.AlexPosn -> Int -> Int -> Frt.SemantError
+argumentCountError pos c1 c2 = Frt.SE pos $ Frt.ArgumentCount c1 c2
 
-isArray (TSTy.Array _) = True
-isArray _ = False
+breakOutOfLoop :: TLex.AlexPosn -> Frt.SemantError
+breakOutOfLoop pos = Frt.SE pos $ Frt.BreakOutsideOfLoop
 
-enterLoop :: SemantState ()
-enterLoop = do (venv, tenv, uniq, looplevel) <- get
-               put (venv, tenv, uniq, looplevel+1)
+duplicateDefinition :: TLex.AlexPosn -> String -> Frt.SemantError
+duplicateDefinition pos str = Frt.SE pos $ Frt.DuplicateDefinition str
 
-exitLoop :: SemantState ()
-exitLoop = do (venv, tenv, uniq, looplevel) <- get
-              put (venv, tenv, uniq, looplevel-1)
+notVariable :: TLex.AlexPosn -> String -> Frt.SemantError
+notVariable pos str = Frt.SE pos $ Frt.NotVariable str
 
-withBinding :: Venv -> Tenv -> SemantState a -> SemantState a
-withBinding venv tenv checker = do s@(_, _, uniq, looplevel) <- get
-                                   put (venv, tenv, uniq, looplevel)
-                                   a <- checker
-                                   put s
-                                   return a
+enterLoop :: Frontend ()
+enterLoop = do (v, t, l, frags) <- Frt.semantStGet
+               Frt.semantStPut (v, t, l+1, frags)
 
-transVar :: TTran.Level -> Maybe TTmp.Label -> TAbsyn.Var -> SemantState ExpTy
-transVar level _ (TAbsyn.SimpleVar(s, pos)) = do (v, _, _, _) <- get
-                                                 case Map.lookup s v of
-                                                   Nothing                                -> throwError $ SE(pos, variableUndefined $ TSym.name s)
-                                                   Just VarEntry{varAccess=acc, varTy=ty} -> do g <- liftIO $ TTran.simpleVar acc level
-                                                                                                return (g, ty)
-                                                   _                                      -> throwError $ SE(pos, nameIsNotVariable $ TSym.name s)
+exitLoop :: Frontend ()
+exitLoop = do (v, t, l, frags) <- Frt.semantStGet
+              Frt.semantStPut (v, t, l-1, frags)
 
-transVar level breakLab (TAbsyn.FieldVar(var, s, pos)) = do (ge, varty) <- transVar level breakLab var
-                                                            aty <- actualTy pos varty
-                                                            if (isRecord aty)
-                                                               then do let TSTy.Record(symboltypairs, _) = aty
-                                                                       case findIndex (\(sym, _) -> sym == s) symboltypairs of
-                                                                         Just idx -> do g <- liftIO $ TTran.field ge idx
-                                                                                        return (g, snd $ symboltypairs !! idx)
-                                                                         Nothing  -> throwError $ SE(pos, recordTypeHasNoField $ TSym.name s)
-                                                               else throwError $ SE(pos, fieldVarOnNonRecordType $ TSym.name s)
+actualTy' :: TLex.AlexPosn -> TSty.Ty -> [TSty.Ty] -> Frontend TSty.Ty
+actualTy' pos a@(TSty.Name (_, iorefmaybety)) searched =
+  do if a `elem` searched
+        then throwError $ cyclicTypeError pos $ map show searched
+        else do maybety <- liftIO $ readIORef iorefmaybety
+                case maybety of
+                  (Just ty) -> actualTy' pos ty (a:searched)
+                  Nothing   -> error "Compiler error: fatal error in cyclic type detection."
+actualTy' pos a searched = do if a `elem` searched 
+                                 then throwError $ cyclicTypeError pos $ map show searched
+                                 else return a
 
-transVar level breakLab (TAbsyn.SubscriptVar(var, idxexp, pos)) = do (ge, varty) <- transVar level breakLab var
-                                                                     aty <- actualTy pos varty
-                                                                     if (isArray aty)
-                                                                        then do let TSTy.Array(ty, _) = aty
-                                                                                (idxge, idxty) <- transExp level breakLab idxexp
-                                                                                if (idxty == TSTy.INT)
-                                                                                    then do g <- liftIO $ TTran.subscript ge idxge
-                                                                                            return (g, ty)
-                                                                                    else throwError $ SE(pos, subscriptIsNotIntType)
-                                                                        else throwError $ SE(pos, subscriptVarOnNonArrayType)
+actualTy :: TLex.AlexPosn -> TSty.Ty -> Frontend TSty.Ty
+actualTy pos ty = actualTy' pos ty []
+
+withBinding :: Venv -> Tenv -> Frontend a -> Frontend a
+withBinding v t checker = do (origv, origt, l, fs) <- Frt.semantStGet
+                             Frt.semantStPut (v, t, l, fs)
+                             a <- checker
+                             (_, _, l', fs') <- Frt.semantStGet
+                             Frt.semantStPut (origv, origt, l', fs')
+                             return a
+
+findFirstDiffInLists :: Eq a => [a] -> [a] -> Maybe Int
+findFirstDiffInLists la lb | la == lb  = Nothing
+                           | length la /= length lb = error "Compiler error: list a and list b must be the"
+                                                            " same length in findFirstDiffInLists."
+                           | otherwise = let equalities = zipWith (==) la lb
+                                         in  (False) `elemIndex` equalities
+
+sym2ty :: TSym.Symbol -> TLex.AlexPosn -> Frontend TSty.Ty
+sym2ty sym pos = do (_, t, _, _) <- Frt.semantStGet
+                    case Map.lookup sym t of
+                      Nothing -> throwError $ undefinedError pos $ TSym.name sym
+                      Just ty -> return ty
+
+addtypetobinding :: TSym.Symbol -> TSty.Ty -> Frontend ()
+addtypetobinding sym ty = do (v, t, l, f) <- Frt.semantStGet
+                             let t' = Map.insert sym ty t
+                             Frt.semantStPut (v, t', l, f)
+
+addfunctiontobinding :: TSym.Symbol -> TTra.Level -> TTmp.Label -> [(TSty.Ty, Frt.Access)] -> TSty.Ty -> Frontend ()
+addfunctiontobinding sym lvl lab params result = do (v, t, l, f) <- Frt.semantStGet
+                                                    let fentry = Frt.FunEntry lvl lab params result
+                                                    let v' = Map.insert sym fentry v
+                                                    Frt.semantStPut (v', t, l, f)
+
+isarraytyp :: TSty.Ty -> Bool
+isarraytyp (Frt.Array _) = True
+isarraytyp _             = False
+
+isrecordtyp :: TSty.Ty -> Bool
+isrecordtyp (Frt.Record _) = True
+isrecordtyp _              = False
+
+zipWithM4 :: Monad m => (a -> b -> c -> d -> m e) -> [a] -> [b] -> [c] -> [d] -> m [e]
+zipWithM4 f (a:args1) (b:args2) (c:args3) (d:args4) = do e <- f a b c d
+                                                         es <- zipWithM4 f args1 args2 args3 args4
+                                                         return $ e:es
+zipWithM4 f [] [] [] [] = return []
+zipWithM4 _ _ _ _ _ = error "zipWithM4: Args 1..4 must have the same length."
+
+zipWithM5 :: (Show a, Show b, Show c, Show d, Show e, Monad m) => (a -> b -> c -> d -> e -> m g) -> [a] -> [b] -> [c] -> [d] -> [e] -> m [g]
+zipWithM5 f (a:args1) (b:args2) (c:args3) (d:args4) (e:args5)= do g <- f a b c d e
+                                                                  gs <- zipWithM5 f args1 args2 args3 args4 args5
+                                                                  return $ g:gs
+zipWithM5 f [] [] [] [] [] = return []
+zipWithM5 _ a b c d e = error $ "zipWithM5: Args 1..5 must have the same length." {- ++ show a ++ "\n" 
+                                                                                    ++ show b ++ "\n"
+                                                                                    ++ show c ++ "\n" 
+                                                                                    ++ show d ++ "\n"
+                                                                                    ++ show e -}
+
+zipTypePos :: [[TSym.Symbol]] -> [[TLex.AlexPosn]] -> [[(TSym.Symbol, TLex.AlexPosn)]]
+zipTypePos typsyms poses = zipWith zipTyppos' typsyms poses
+  where zipTyppos' syms poses = zip syms poses
 
 
-transExp :: TTran.Level -> Maybe TTmp.Label -> TAbsyn.Exp -> SemantState ExpTy
--- Binary Operation
-transExp level breakLab TAbsyn.OpExp{TAbsyn.opLeft=el, TAbsyn.opOper=op, TAbsyn.opRight=er, TAbsyn.opPos=pos}
-  = do (gel, tl) <- transExp level breakLab el
-       (ger, tr) <- transExp level breakLab er
-       atl <- actualTy pos tl
-       atr <- actualTy pos tr
-       if (atl == atr)
-          then case atl of
-                 TSTy.INT    -> do {g <- liftIO $ selectFunNonStr op gel ger; return (g, TSTy.INT)}
-                 TSTy.String -> do case op of
-                                     TAbsyn.EqOp  -> do { g <- liftIO $ selectFunStr op gel ger; return (g, TSTy.INT)}
-                                     TAbsyn.NeqOp -> do { g <- liftIO $ selectFunStr op gel ger; return (g, TSTy.INT)}
-                                     _            -> throwError $ SE(pos, nonOrdCmpOnStr)
-                 TSTy.Nil    -> throwError $ SE(pos, binNilOp)
-                 TSTy.Unit   -> throwError $ SE(pos, binUnitOp)
-                 _           -> case op of
-                                  TAbsyn.EqOp  -> do { g <- liftIO $ selectFunNonStr op gel ger; return (g, TSTy.INT)}
-                                  TAbsyn.NeqOp -> do { g <- liftIO $ selectFunNonStr op gel ger; return (g, TSTy.INT)}
-                                  _            -> throwError $ SE(pos, arrayRecOrderOp)
-          else throwError $ SE(pos, binOpNonMatchingError)
-  where selectFunNonStr TAbsyn.EqOp  = TTran.eqCmp
-        selectFunNonStr TAbsyn.NeqOp = TTran.notEqCmp
-        selectFunNonStr TAbsyn.LtOp  = TTran.lessThan
-        selectFunNonStr TAbsyn.LeOp  = TTran.lessThanOrEq
-        selectFunNonStr TAbsyn.GtOp  = flip TTran.lessThanOrEq
-        selectFunNonStr TAbsyn.GeOp  = flip TTran.lessThan
-        selectFunNonStr o            = TTran.arithmetic o
-        selectFunStr    TAbsyn.EqOp  = TTran.eqStr
-        selectFunStr    TAbsyn.NeqOp = TTran.notEqStr
-        selectFunStr    _            = error "Compiler error: non order operator on string"
+transdec :: TTra.Level -> Maybe TTmp.Label -> TAbs.Dec -> Frontend (Venv, Tenv, [TTra.Gexp])
+transdec lvl lab dec =
+  let g (TAbs.FunctionDec fdecs) = let fnamesyms    = map TAbs.fundecName fdecs
+                                       ffieldnamess = map (map TAbs.tfieldName) $ map TAbs.fundecParams fdecs
+                                       ffieldtypess = map (map TAbs.tfieldTyp)  $ map TAbs.fundecParams fdecs
+                                       ffieldposess = map (map TAbs.tfieldPos) $ map TAbs.fundecParams fdecs
+                                       fbodyexps = map TAbs.fundecBody fdecs
+                                       ftypes = map TAbs.fundecResult fdecs
+                                   in  do fparamtyss <- mapM (mapM (uncurry sym2ty)) (zipTypePos ffieldtypess ffieldposess)
+                                          (flevels, formalsWithOffsetss) <- liftM unzip $ mapM (TTra.newLevel lvl) fparamtyss
+                                          fresulttys <- mapM ftype2ty ftypes
+                                          flabs <- mapM (\_ -> TTmp.newLabel) fdecs
+                                          let fentries = zipWith4 Frt.FunEntry flevels flabs formalsWithOffsetss fresulttys
+                                          (v, t, _, _) <- Frt.semantStGet
+                                          let v' = foldr (uncurry Map.insert) v (zip fnamesyms fentries)
+                                          _ <- withBinding v' t $ zipWithM5 (checkbody lab) flevels flabs fresulttys 
+                                                                            (zip3 ffieldnamess fparamtyss $ liftM (map snd) formalsWithOffsetss)
+                                                                            fbodyexps
+                                          return (v', t, [])
+        where ftype2ty (Just (s, pos)) = sym2ty s pos
+              ftype2ty Nothing         = return TSty.Unit
+              checkbody newlab newlvl funlab decty (paramsyms, paramtys, paramaccesses) bodyexp = 
+                do let varentries = zipWith3 Frt.VarEntry paramaccesses paramtys $ take (length paramsyms) $ repeat False
+                   (v, t, _, _) <- Frt.semantStGet
+                   let v' = foldr (uncurry Map.insert) v (zip paramsyms varentries)
+                   (gexp, bodyty) <- withBinding v' t $ transexp newlvl newlab bodyexp
+                   bodyty' <- actualTy (TPar.extractPosition bodyexp) bodyty
+                   decty' <- actualTy (TPar.extractPosition bodyexp) decty
+                   if bodyty' == decty'
+                      then TTra.createProcFrag funlab newlvl gexp
+                      else throwError $ typeMisMatchError (TPar.extractPosition bodyexp) (show bodyty) (show decty)
+      g (TAbs.VarDec {TAbs.varDecVar=vardec, TAbs.varDecTyp=typandpos, TAbs.varDecInit=initexp, TAbs.varDecPos=pos}) =
+        do (initgexp, initty) <- transexp lvl lab initexp
+           let varnamesym = TAbs.vardecName vardec
+           varaccess <- liftIO $ TTra.allocInFrame lvl
+           var <- TTra.simpleVar varaccess lvl
+           assigngexp <- TTra.assign var initgexp
+           case typandpos of
+             Just (typsym, typpos) -> do typty <- sym2ty typsym typpos
+                                         initty' <- actualTy (TPar.extractPosition initexp) initty
+                                         typty' <- actualTy typpos typty
+                                         if initty' == typty'
+                                            then do let varentry = Frt.VarEntry varaccess initty' False
+                                                    (v, t, _, _) <- Frt.semantStGet
+                                                    let v' = Map.insert varnamesym varentry v
+                                                    return (v', t, [assigngexp])
+                                            else throwError $ typeMisMatchError pos (show initty) (show typty)
+             Nothing -> do (v, t, _, _) <- Frt.semantStGet
+                           let varentry = Frt.VarEntry varaccess initty False
+                           let v' = Map.insert varnamesym varentry v
+                           return (v', t, [assigngexp])
+      g (TAbs.TypeDec decs) =
+        do (v, t, _, _) <- Frt.semantStGet
+           let names = map TAbs.typedecName decs
+           let poses = map TAbs.typedecPos decs
+           mapM_ (uncurry (checkname t)) (zip poses names)
+           refNothings <- mapM (\_ -> liftIO $ newIORef Nothing) decs
+           let nametypes = zipWith (\sym ref -> TSty.Name (sym, ref)) names refNothings
+           let t' = foldr (uncurry Map.insert) t (zip names nametypes)
+           let absyntys = map TAbs.typedecTy decs
+           tys <- mapM (withBinding v t' . transty) absyntys
+           mapM_ (\(ref, ty) -> liftIO $ writeIORef ref $ Just ty) (zip refNothings tys)
+           return (v, t', [])
+        where checkname t pos sym = do case Map.lookup sym t of
+                                         Nothing -> return ()
+                                         Just _  -> throwError $ duplicateDefinition pos $ TSym.name sym
+  in g dec
+
+transexp :: TTra.Level -> Maybe TTmp.Label -> TAbs.Exp -> Frontend GexpTy
+transexp lvl lab absexp = 
+  let g (TAbs.VarExp v)   = transvar lvl lab v
+      g (TAbs.NilExp _)   = return (TTra.nilGexp, TSty.Nil)
+      g (TAbs.IntExp (v, _)) = do gexp <- TTra.intExp v
+                                  return (gexp, TSty.INT)
+      g (TAbs.StringExp (v, _)) = do gexp <- TTra.stringExp v
+                                     return (gexp, TSty.String)
+      g (TAbs.SeqExp []) = error "Compiler error: fatal error in sequence"
+                                 " expression type checking"
+      g (TAbs.SeqExp (epos:[])) = g $ fst epos
+      g (TAbs.SeqExp (epos:eposes)) = do (ge, _) <- g $ fst epos
+                                         (ge', ty) <- g $ TAbs.SeqExp eposes
+                                         ge'' <- TTra.constructEseq ge ge'
+                                         return (ge'', ty)
+      g (TAbs.AppExp {TAbs.appFunc=funcsym, TAbs.appArgs=funcargs, TAbs.appPos=pos}) = 
+        do (v, _, _, _) <- Frt.semantStGet
+           case Map.lookup funcsym v of
+             Just (Frt.FunEntry {Frt.funLevel=funlvl
+                                ,Frt.funLabel=funlab
+                                ,Frt.funFormals=funformals
+                                ,Frt.funResult=funresult}) ->
+               do (ges, tys) <- liftM unzip $ mapM g funcargs
+                  let argposes = map TPar.extractPosition funcargs
+                  argtys <- mapM (uncurry actualTy) (zip argposes tys)
+                  formaltys <- mapM (actualTy pos) (map fst funformals)
+                  case findFirstDiffInLists argtys formaltys of
+                    Nothing -> do gexp <- TTra.callFunction funlab lvl funlvl ges
+                                  return (gexp, funresult)
+                    Just idx -> throwError $ typeMisMatchError (TPar.extractPosition $ funcargs !! idx) (show $ argtys !! idx) (show $ formaltys !! idx)
+             Just _ -> throwError $ notCallableError pos $ TSym.name funcsym
+             Nothing -> throwError $ undefinedError pos $ TSym.name funcsym
+      g (TAbs.OpExp {TAbs.opLeft=lexp, TAbs.opOper=op, TAbs.opRight=rexp, TAbs.opPos=pos}) =
+        do (lgexp, lty) <- g lexp
+           (rgexp, rty) <- g rexp
+           lty' <- actualTy (TPar.extractPosition lexp) lty
+           rty' <- actualTy (TPar.extractPosition rexp) rty
+           if (lty' == rty')
+              then case lty of
+                     TSty.INT -> do { gexp <- op2fun op lgexp rgexp; return (gexp, TSty.INT) }
+                     TSty.String -> do { gexp <- op2funstr op lgexp rgexp; return (gexp, TSty.INT) }
+                     TSty.Nil -> throwError $ undefinedBinop pos (show TSty.Nil) (show rty)
+                     TSty.Unit -> throwError $ undefinedBinop pos (show TSty.Unit) (show rty)
+                     _ -> case op of
+                            TAbs.EqOp -> do { gexp <- op2fun op lgexp rgexp; return (gexp, TSty.INT) }
+                            TAbs.NeqOp -> do { gexp <- op2fun op lgexp rgexp; return (gexp, TSty.INT) }
+                            _ -> throwError $ undefinedBinop pos (show lty) (show rty)
+              else throwError $ typeMisMatchError pos (show lty) (show rty)
+        where op2fun TAbs.EqOp = TTra.eqCmp
+              op2fun TAbs.NeqOp = TTra.notEqCmp
+              op2fun TAbs.LtOp  = TTra.lessThan
+              op2fun TAbs.LeOp  = TTra.lessThanOrEq
+              op2fun TAbs.GtOp  = flip TTra.lessThan
+              op2fun TAbs.GeOp  = flip TTra.lessThanOrEq
+              op2fun o          = TTra.arithmetic o
+              op2funstr TAbs.EqOp = TTra.eqStr
+              op2funstr TAbs.NeqOp = TTra.notEqStr
+              op2funstr TAbs.LtOp = TTra.strLessThan
+              op2funstr TAbs.LeOp = TTra.strLessThanOrEq
+              op2funstr TAbs.GtOp = flip TTra.strLessThan
+              op2funstr TAbs.GeOp = flip TTra.strLessThanOrEq
+              op2funstr _         = error "Compiler error: impossible operator on string."
+      g (TAbs.RecordExp {TAbs.recordFields=efields, TAbs.recordTyp=typsym, TAbs.recordPos=pos}) =
+        let checkrecord ty = do let typefields = fst ty 
+                                let (fieldnames, fieldtys) = unzip typefields
+                                let (efieldnames, eexps, eposes) = unzip3 efields
+                                if length efieldnames == length fieldnames
+                                   then case findFirstDiffInLists efieldnames fieldnames of
+                                          Nothing  -> do (gexps, exptys) <- liftM unzip $ mapM g eexps
+                                                         exptys' <- mapM (uncurry actualTy) (zip eposes exptys)
+                                                         fieldtys' <- mapM (actualTy pos) fieldtys
+                                                         case findFirstDiffInLists exptys' fieldtys' of
+                                                           Nothing  -> do finalgexp <- TTra.createRecord gexps
+                                                                          return (finalgexp, TSty.Record ty)
+                                                           Just idx -> throwError $ typeMisMatchError
+                                                                                    (TPar.extractPosition $ eexps !! idx)
+                                                                                    (show $ exptys !! idx)
+                                                                                    (show $ fieldtys !! idx)
+                                          Just idx -> throwError $ argumentNameError (TPar.extractPosition $ eexps !! idx)
+                                                                                     (TSym.name $ efieldnames !! idx)
+                                                                                     (TSym.name $ fieldnames !! idx)
+                                   else throwError $ argumentCountError pos (length efieldnames) (length fieldnames)
+        in do (_, t, _, _) <- Frt.semantStGet
+              case Map.lookup typsym t of
+                Nothing -> throwError $ undefinedError pos $ TSym.name typsym
+                Just (TSty.Record ty) -> checkrecord ty
+                Just typ@(TSty.Name _) -> do aty <- actualTy pos typ
+                                             case aty of
+                                               TSty.Record ty -> checkrecord ty
+                                               _ -> throwError $ typeMisMatchError pos ("Record") (TSym.name typsym)
+                Just _ -> throwError $ typeMisMatchError pos ("Record") (TSym.name typsym)
+      g (TAbs.AssignExp {TAbs.assignVar=var, TAbs.assignExp=aexp, TAbs.assignPos=pos}) =
+        do (vgexp, vty) <- transvar lvl lab var
+           (agexp, aty) <- g aexp
+           vty' <- actualTy pos vty
+           aty' <- actualTy (TPar.extractPosition aexp) aty
+           if vty' == aty'
+              then do gexp <- TTra.assign vgexp agexp
+                      return (gexp, TSty.Unit)
+              else throwError $ typeMisMatchError pos (show vty) (show aty)
+      g (TAbs.IfExp {TAbs.ifTest=testexp, TAbs.ifThen=thenexp, TAbs.ifElse=elseexp, TAbs.ifPos=pos}) =
+        do (testgexp, testty) <- g testexp
+           (thengexp, thenty) <- g thenexp
+           thenty' <- actualTy (TPar.extractPosition thenexp) thenty
+           if testty == TSty.INT
+              then case elseexp of
+                     Just elseexp' -> do (elsegexp, elsety) <- g elseexp'
+                                         elsety' <- actualTy (TPar.extractPosition elseexp') elsety
+                                         if (thenty' == elsety')
+                                            then do gexp <- TTra.ifThenElse testgexp thengexp elsegexp
+                                                    return (gexp, elsety)
+                                            else throwError $ typeMisMatchError pos (show thenty) (show elsety)
+                     Nothing       -> if (thenty' == TSty.Unit)
+                                         then do gexp <- TTra.ifThen testgexp thengexp
+                                                 return (gexp, TSty.Unit)
+                                         else throwError $ typeMisMatchError pos (show TSty.Unit) (show thenty)
+              else throwError $ typeMisMatchError pos (show TSty.INT) (show testty)
+      g (TAbs.WhileExp {TAbs.whileTest=testexp, TAbs.whileBody=bodyexp, TAbs.whilePos=pos}) =
+        do (testgexp, testty) <- g testexp
+           if (testty == TSty.INT)
+              then do donelab <- TTmp.newLabel
+                      enterLoop
+                      (bodygexp, bodyty) <- transexp lvl (Just donelab) bodyexp
+                      exitLoop
+                      bodyty' <- actualTy (TPar.extractPosition bodyexp) bodyty
+                      if (bodyty' == TSty.Unit)
+                         then do gexp <- TTra.whileLoop testgexp bodygexp donelab
+                                 return (gexp, TSty.Unit)
+                         else throwError $ typeMisMatchError pos (show TSty.Unit) (show bodyty)
+              else throwError $ typeMisMatchError pos (show TSty.INT) (show testty)
+      g (TAbs.ForExp {TAbs.forVar=vardec, TAbs.forLo=lowexp, TAbs.forHi=highexp, TAbs.forBody=bodyexp, TAbs.forPos=pos}) =
+        do let itername = TAbs.vardecName vardec
+           (lowgexp, lowty) <- g lowexp
+           (highgexp, highty) <- g highexp
+           if (lowty == highty)
+              then if (lowty == TSty.INT)
+                      then do (v, t, _, _) <- Frt.semantStGet
+                              iteraccess <- liftIO $ TTra.allocInFrame lvl
+                              let v' = Map.insert itername (Frt.VarEntry iteraccess TSty.INT True) v
+                              itergexp   <- TTra.simpleVar iteraccess lvl
+                              donelab <- TTmp.newLabel
+                              enterLoop
+                              (bodygexp, bodyty) <- withBinding v' t (transexp lvl (Just donelab) bodyexp)
+                              exitLoop
+                              bodyty' <- actualTy (TPar.extractPosition bodyexp) bodyty
+                              if bodyty' == TSty.Unit
+                                 then do gexp <- TTra.forLoop lowgexp highgexp bodygexp donelab itergexp
+                                         return (gexp, TSty.Unit)
+                                 else throwError $ typeMisMatchError pos (show TSty.Unit) (show bodyty)
+                      else throwError $ typeMisMatchError pos (show TSty.INT) (show lowty)
+              else throwError $ typeMisMatchError pos (show lowty) (show highty)
+      g (TAbs.BreakExp pos) =
+        do (_, _, l, _) <- Frt.semantStGet
+           if (l > 0)
+              then case lab of
+                     Just lab' -> do gexp <- TTra.break lab'
+                                     return (gexp, TSty.Unit)
+                     Nothing -> throwError $ breakOutOfLoop pos
+              else throwError $ breakOutOfLoop pos
+      g (TAbs.LetExp {TAbs.letDecs=decs, TAbs.letBody=bodyexp, TAbs.letPos=pos}) =
+        let transdecs (d:[]) = transdec lvl lab d
+            transdecs (d:ds) = do (v, t, ges) <- transdec lvl lab d
+                                  (v', t', gess) <- withBinding v t $ transdecs ds
+                                  return (v', t', ges++gess)
+            transdecs [] = do (v, t, _, _) <- Frt.semantStGet
+                              return (v, t, [])
+        in  do (v', t', ges) <- transdecs decs
+               (bodygexp, bodyty) <- withBinding v' t' $ g bodyexp
+               gexp <- TTra.letExpression ges bodygexp
+               return (gexp, bodyty)
+      g (TAbs.ArrayExp {TAbs.arrayTyp=typsym, TAbs.arraySize=sizexp, TAbs.arrayInit=initexp, TAbs.arrayPos=pos}) =
+        let checkarray typ ty =  do (sizegexp, sizety) <- g sizexp
+                                    if (sizety == TSty.INT)
+                                       then do (initgexp, initty) <- g initexp
+                                               initty' <- actualTy (TPar.extractPosition initexp) initty
+                                               ty' <- actualTy pos ty
+                                               if (initty' == ty')
+                                                  then do gexp <- TTra.createArray sizegexp initgexp
+                                                          return (gexp, typ)
+                                                  else throwError $ typeMisMatchError pos (show ty) (show initty)
+                                       else throwError $ typeMisMatchError pos (show TSty.INT) (show sizety)
+        in do (_, t, _, _) <- Frt.semantStGet
+              case Map.lookup typsym t of
+                Just typ@(Frt.Array (ty, _)) -> checkarray typ ty
+                Just typ@(Frt.Name _) -> do aty <- actualTy pos typ
+                                            case aty of
+                                              Frt.Array (ty, _) -> checkarray aty ty
+                                              _ -> throwError $ typeMisMatchError pos ("Array") (show typsym)
+                Just typ -> throwError $ typeMisMatchError pos ("Array") (show typ)
+                Nothing -> throwError $ undefinedError pos (TSym.name typsym)
+           
+  in  g absexp
+
+transvar :: TTra.Level -> Maybe TTmp.Label -> TAbs.Var -> Frontend GexpTy
+transvar lvl lab (TAbs.SimpleVar(s, pos)) = do (v, _, _, _) <- Frt.semantStGet
+                                               case Map.lookup s v of
+                                                 Nothing -> throwError $ undefinedError pos $ TSym.name s
+                                                 Just (Frt.VarEntry acc ty _) -> do gexp <- TTra.simpleVar acc lvl
+                                                                                    return (gexp, ty)
+                                                 Just _ -> throwError $ notVariable pos $ TSym.name s
+transvar lvl lab (TAbs.FieldVar(v, s, pos)) = do (vgexp, vty) <- transvar lvl lab v
+                                                 vty' <- actualTy (TPar.extractPosition v) vty
+                                                 case vty' of
+                                                   TSty.Record(symtypairs, _) ->
+                                                     case findIndex (\(sym, _) -> sym == s) symtypairs of
+                                                       Nothing  -> throwError $ undefinedError pos $ TSym.name s
+                                                       Just idx -> do let ty = snd $ symtypairs !! idx
+                                                                      gexp <- TTra.field vgexp idx
+                                                                      return (gexp, ty)
+                                                   _ -> throwError $ typeMisMatchError pos ("Record") (show vty')
+transvar lvl lab (TAbs.SubscriptVar(v, idxexp, pos)) = do (vgexp, vty) <- transvar lvl lab v
+                                                          (idxgexp, idxty) <- transexp lvl lab idxexp
+                                                          idxty' <- actualTy pos idxty
+                                                          if idxty' == TSty.INT 
+                                                             then do vty' <- actualTy (TPar.extractPosition v) vty
+                                                                     case vty' of
+                                                                       TSty.Array (innerty, _) -> do gexp <- TTra.subscript vgexp idxgexp
+                                                                                                     return (gexp, innerty)
+                                                                       _ -> throwError $ typeMisMatchError pos ("Array") (show vty)
+                                                             else throwError $ typeMisMatchError pos (show TSty.INT) (show idxty)
+                                                 
+
+transty :: TAbs.Ty -> Frontend TSty.Ty
+transty (TAbs.NameTy(sym, pos)) =
+  do (_, t, _, _) <- Frt.semantStGet
+     case Map.lookup sym t of
+       Nothing -> throwError $ undefinedError pos $ TSym.name sym 
+       Just ty -> return ty
+
+transty (TAbs.ArrayTy(sym, pos)) =
+  do (_, t, _, _) <- Frt.semantStGet
+     case Map.lookup sym t of
+       Nothing -> throwError $ undefinedError pos $ TSym.name sym
+       Just ty -> do u <- Frt.genUniq
+                     return $ TSty.Array(ty, u)
+
+transty (TAbs.RecordTy tfields) =
+  do (_, t, _, _) <- Frt.semantStGet
+     let names = map TAbs.tfieldName tfields
+     let types = map TAbs.tfieldTyp  tfields
+     let poses = map TAbs.tfieldPos  tfields
+     case findIndex (not . (flip exists t)) types of
+       Nothing -> do let tys = map (fromJust . (flip Map.lookup t)) types
+                     u <- Frt.genUniq
+                     return $ TSty.Record (zip names tys, u)
+       Just idx -> throwError $ undefinedError (poses !! idx) (TSym.name $ names !! idx)
+  where exists typ t = typ `Map.member` t
 
 
--- Variable
-transExp level breakLab (TAbsyn.VarExp var) = transVar level breakLab var
--- Nil expression
-transExp _     _ TAbsyn.NilExp = return (TTran.nilGexp, TSTy.Nil)
--- Int expression
-transExp _     _ (TAbsyn.IntExp val) = do g <- liftIO $ TTran.intExp val 
-                                          return (g, TSTy.INT)
--- String
-transExp _     _ (TAbsyn.StringExp (str, _)) = do g <- liftIO $ TTran.stringExp str
-                                                  return (g, TSTy.String)
--- Sequence expression
-transExp level breakLab (TAbsyn.SeqExp ((e, _):[]))
-  = transExp level breakLab e
-transExp level breakLab (TAbsyn.SeqExp ((e, _):es))
-  = do (ge, _) <- transExp level breakLab e
-       (greste, ty) <- transExp level breakLab (TAbsyn.SeqExp es)
-       g <- liftIO $ TTran.constructEseq ge greste
-       return (g, ty)
-transExp _ _ (TAbsyn.SeqExp []) = error "Impossible SeqExp case"
--- Function application
-transExp level breakLab TAbsyn.AppExp{TAbsyn.appFunc=funcsymbol, TAbsyn.appArgs=es, TAbsyn.appPos=pos}
-  = do (venv, _, _, _) <- get
-       case Map.lookup funcsymbol venv of
-          Just (FunEntry{ funLevel=funlvl
-                        , funLabel=funlab
-                        , funFormals=formaltys
-                        , funResult=resty }) -> do (ges, tys) <- liftM unzip $ mapM (transExp level breakLab) es
-                                                   actualTys  <- mapM (actualTy pos) tys
-                                                   actualFormalTys <- mapM (actualTy pos . fst) formaltys
-                                                   if actualTys==actualFormalTys
-                                                      then do g <- liftIO $ TTran.callFunction funlab level funlvl ges
-                                                              return (g, resty)
-                                                      else throwError $ SE(pos, parameterTypesDoesNotMatchFunctionTypes)
-          Just _ -> throwError $ SE(pos, variableIsNotFunction $ TSym.name funcsymbol)
-          Nothing -> throwError $ SE(pos, undefinedFuncError $ TSym.name funcsymbol) 
--- Assignment
-transExp level breakLab TAbsyn.AssignExp{TAbsyn.assignVar=var, TAbsyn.assignExp=exp, TAbsyn.assignPos=pos}
-  = do (gevar, tvar) <- transVar level breakLab var
-       (geexp, texp) <- transExp level breakLab exp
-       if tvar == texp
-          then do g <- liftIO $ TTran.assign gevar geexp
-                  return (g, TSTy.Unit)
-          else throwError $ SE(pos, assignmentTypeMismatch)
--- If expression
-transExp level breakLab TAbsyn.IfExp{TAbsyn.ifTest=testexp, TAbsyn.ifThen=thenexp, TAbsyn.ifElse=maybeElse, TAbsyn.ifPos=pos}
-  = do (testge, testty) <- transExp level breakLab testexp
-       (thenge, thenty) <- transExp level breakLab thenexp
-       if testty == TSTy.INT
-          then if isJust maybeElse
-               then do let elseexp = fromJust maybeElse
-                       (elsege, elsety) <- transExp level breakLab elseexp
-                       actualThenTy <- actualTy pos thenty
-                       actualElseTy <- actualTy pos elsety
-                       if actualThenTy==actualElseTy
-                          then do g <- liftIO $ TTran.ifThenElse testge thenge elsege
-                                  return (g, elsety)
-                          else throwError $ SE(pos, ifthenTypeMismatch)
-               else do g <- liftIO $ TTran.ifThen testge thenge
-                       return (g, thenty)
-          else throwError $ SE(pos, illegalIfTestType)
--- While expression
-transExp level breakLab TAbsyn.WhileExp{TAbsyn.whileTest=testexp, TAbsyn.whileBody=bodyexp, TAbsyn.whilePos=pos}
-  = do (testge, testty) <- transExp level breakLab testexp
-       donelab <- liftIO TTmp.newLabel
-       if testty == TSTy.INT
-          then do (bodyge, bodyty) <- checkWhileInternal donelab
-                  if bodyty == TSTy.Unit
-                     then do g <- liftIO $ TTran.whileLoop testge bodyge donelab
-                             return (g, TSTy.Unit)
-                     else throwError $ SE(pos, whileLoopBodyUnit)
-          else throwError $ SE(pos, illegalWhileTestType)
-  where checkWhileInternal donelab = do enterLoop
-                                        bodyres <- transExp level (Just donelab) bodyexp
-                                        exitLoop
-                                        return bodyres
--- For expression
-transExp level breakLab TAbsyn.ForExp{TAbsyn.forVar=vardec, TAbsyn.forLo=lowexp, TAbsyn.forHi=highexp, TAbsyn.forBody=bodyexp, TAbsyn.forPos=pos}
-  = do (venv, tenv, _, _) <- get
-       counteraccess <- liftIO $ TTran.allocInFrame level
-       countergexp <- liftIO $ TTran.simpleVar counteraccess level
-       let venv' = Map.insert (TAbsyn.vardecName vardec) VarEntry{varAccess=counteraccess, varTy=TSTy.INT, varReadOnly=False} venv
-       donelab <- liftIO TTmp.newLabel
-       (lowge, lowty) <- transExp level breakLab lowexp
-       (highge, highty) <- transExp level breakLab highexp
-       if (lowty == highty) && (lowty == TSTy.INT)
-          then withBinding venv' tenv $ checkForInternal donelab lowge highge countergexp
-          else throwError $ SE(pos, forLoopBoundaryType)
-    where checkForInternal donelab logexp higexp counterge = do enterLoop
-                                                                (bodyge, bodyty) <- transExp level (Just donelab) bodyexp
-                                                                exitLoop
-                                                                if (bodyty == TSTy.Unit)
-                                                                   then do g <- liftIO $ TTran.forLoop logexp higexp bodyge donelab counterge
-                                                                           return (g, TSTy.Unit)
-                                                                   else throwError $ SE(pos, forLoopBodyUnit)
--- Break expression
-transExp _ (Just breakLab) TAbsyn.BreakExp{TAbsyn.breakPos=pos}
-  = do (_, _, _, inloop) <- get
-       if (inloop > 0)
-          then do g <- liftIO $ TTran.break breakLab
-                  return (g, TSTy.Unit)
-          else throwError $ SE(pos, breakExpNotInLoop)
-transExp _ _ TAbsyn.BreakExp{TAbsyn.breakPos=pos} = throwError $ SE(pos, breakExpNotInLoop)
--- Let expression
-transExp level breakLab TAbsyn.LetExp{TAbsyn.letDecs=decs, TAbsyn.letBody=bodyexp, TAbsyn.letPos=_}
-  = do (venv', tenv', ges) <- transDecs decs
-       (bodyge, bodyty) <- withBinding venv' tenv' checkLetExpInternal
-       g <- liftIO $ TTran.letExpression ges bodyge
-       return (g, bodyty)
-  where transDecs (d:[])   = do (v, t, ges) <- transDec level breakLab d
-                                return (v, t, ges)
-        transDecs (d:ds)   = do (v, t, ges) <- transDec level breakLab d
-                                (v', t', gess) <- withBinding v t (transDecs ds)
-                                return (v', t', ges++gess)
-        transDecs []       = do (v, t, _, _) <- get
-                                return (v, t, [])
-        checkLetExpInternal = transExp level breakLab bodyexp
--- Array expression
-transExp level breakLab TAbsyn.ArrayExp{TAbsyn.arrayTyp=arraytypesymbol, TAbsyn.arraySize=szexp, TAbsyn.arrayInit=initexp, TAbsyn.arrayPos=pos}
-  = do (_, tenv, _, _) <- get
-       case Map.lookup arraytypesymbol tenv of
-          Just ty -> checkArrayExpInternal ty
-          Nothing -> throwError $ SE(pos, undefinedArrError $ TSym.name arraytypesymbol)
-    where checkArrayExpInternal ty = do aty <- actualTy pos ty
-                                        (szge, szty) <- transExp level breakLab szexp
-                                        (initge, initty) <- transExp level breakLab initexp
-                                        if (isArray aty)
-                                           then do let TSTy.Array (internalTy, _) = aty
-                                                   ainternalTy <- actualTy pos internalTy
-                                                   if (ainternalTy == initty)
-                                                      then if (szty == TSTy.INT)
-                                                           then do g <- liftIO $ TTran.createArray szge initge
-                                                                   return (g, aty)
-                                                           else throwError $ SE(pos, arraySizeNotInt)
-                                                      else throwError $ SE(pos, arrayInitMismatch)
-                                           else throwError $ SE(pos, nonarrayCreation $ TSym.name arraytypesymbol)
--- Record creation
-transExp level breakLab TAbsyn.RecordExp{TAbsyn.recordFields=efields, TAbsyn.recordTyp=recordtypesymbol, TAbsyn.recordPos=pos}
-  = do (_, tenv, _, _) <- get
-       case Map.lookup recordtypesymbol tenv of
-         Just rty@(TSTy.Record (symboltypair, _)) -> checkRecordInternal symboltypair rty
-         Just nty@(TSTy.Name (namesymbol, _))     -> do aty <- actualTy pos nty
-                                                        if isRecord aty
-                                                           then do let TSTy.Record (symboltypair, _) = aty
-                                                                   checkRecordInternal symboltypair aty
-                                                           else throwError $ SE(pos, illegalRecType $ TSym.name namesymbol)
-         _ -> throwError $ SE(pos, undefinedRecError $ TSym.name recordtypesymbol)
-    where fst'  (a, _, _) = a
-          snd'  (_, b, _) = b
-          checkRecordInternal symboltypair rty = do let symbols = map fst' efields
-                                                    let exprs   = map snd' efields
-                                                    let recsymbols = map fst symboltypair
-                                                    let rectys     = map snd symboltypair
-                                                    (ges, tys) <- liftM unzip $ mapM (transExp level breakLab) exprs
-                                                    actualTys <- mapM (actualTy pos) tys
-                                                    actualRecTys <- mapM (actualTy pos) rectys
-                                                    if symbols==recsymbols
-                                                       then if actualTys==actualRecTys
-                                                               then do g <- liftIO $ TTran.createRecord ges
-                                                                       return (g, rty)
-                                                               else throwError $ SE(pos, recTypeMisMatch)
-                                                       else throwError $ SE(pos, recSymbolMisMatch)
-                                        
+transprog :: Frontend [Frt.Frag]
+transprog = let builtintypes = [("string", TSty.String), ("int", TSty.INT)]
+                builtinfuncnames = ["chr", "concat", "exit", "flush", "getchar"
+                                   ,"not", "ord", "print", "size", "substring"]
+                builtinfunctys = [TSty.String, TSty.String, TSty.Unit, TSty.Unit,
+                                  TSty.String, TSty.INT, TSty.INT, TSty.Unit,
+                                  TSty.INT, TSty.String]
+                builtinparamtys = [[TSty.INT], [TSty.String, TSty.String]
+                                  ,[TSty.INT], [], [], [TSty.INT], [TSty.String]
+                                  ,[TSty.String], [TSty.String]
+                                  ,[TSty.String, TSty.INT, TSty.INT]]
+                
+            in
+              do builtintypsym <- mapM TSym.symbol $ map fst builtintypes
+                 mapM_ (uncurry addtypetobinding) (zip builtintypsym $ map snd builtintypes)
 
-transDec :: TTran.Level -> Maybe TTmp.Label -> TAbsyn.Dec -> SemantState (Venv, Tenv, [TTran.Gexp])
--- Function declaration
-transDec level breakLab (TAbsyn.FunctionDec fs) = do let namesymbols = map TAbsyn.fundecName fs
-                                                     let paramfields = map TAbsyn.fundecParams fs
-                                                     let resultmaybesymbols = map TAbsyn.fundecResult fs
-                                                     (venv, tenv, _, _) <- get
-                                                     resultTys <- mapM (maybeResSymToTy tenv) resultmaybesymbols
-                                                     paramTyss <- mapM (mapM $ tfieldToTy tenv) paramfields
-                                                     funlabels <- mapM (\_ -> liftIO TTmp.newLabel) fs
-                                                     (funlvls,formalsWithOffsetss) <- liftM unzip $ mapM (\paramTys -> liftIO $ TTran.newLevel level paramTys) paramTyss
-                                                     let fundecs = zipWith4 funDecZipper funlvls funlabels formalsWithOffsetss resultTys
-                                                     let funsymboldecpair = zip namesymbols fundecs
-                                                     let venv' = foldr insert' venv funsymboldecpair
-                                                     withBinding venv' tenv (mapM_ (uncurry4 checkBody) (zip4 fs formalsWithOffsetss funlvls funlabels))
-                                                     return (venv', tenv, [])
-                                                  where uncurry4 fun (a, b, c, d) = fun a b c d
-                                                        maybeResSymToTy _    Nothing  = return TSTy.Unit
-                                                        maybeResSymToTy tenv (Just (s, pos)) = do if s `Map.member` tenv
-                                                                                                     then return $ fromJust $ Map.lookup s tenv
-                                                                                                     else throwError $ SE(pos, undefinedFuncRetType $ TSym.name s)
-                                                        funDecZipper funlvl funlab paramTys resultTy = FunEntry{funLevel=funlvl
-                                                                                                               ,funLabel=funlab
-                                                                                                               ,funFormals=paramTys
-                                                                                                               ,funResult=resultTy}
-                                                        insert' (k, v) = Map.insert k v
-                                                        varEntryZipper ty (_, access) = VarEntry{varAccess=access, varTy=ty, varReadOnly=False}
-                                                        checkBody TAbsyn.Fundec{TAbsyn.fundecName=namesym
-                                                                               ,TAbsyn.fundecParams=tfields
-                                                                               ,TAbsyn.fundecResult=mayberes
-                                                                               ,TAbsyn.fundecBody=bexp
-                                                                               ,TAbsyn.fundecPos=pos}
-                                                                  formalsWithOffsets
-                                                                  funlvl
-                                                                  funlab
-                                                          = do (v, t, _, _) <- get
-                                                               let paramnamesymbols = map TAbsyn.tfieldName tfields
-                                                               paramTys <- mapM (tfieldToTy t) tfields
-                                                               let varentries = zipWith varEntryZipper paramTys formalsWithOffsets
-                                                               let varNameEntryPairs = zip paramnamesymbols varentries
-                                                               let v' = foldr insert' v varNameEntryPairs
-                                                               (bodyge, bodyTy) <- withBinding v' t $ transExp funlvl breakLab bexp
-                                                               case mayberes of
-                                                                 Nothing -> if (bodyTy == TSTy.Unit) 
-                                                                               then liftIO $ TTran.createProcFrag funlab funlvl bodyge
-                                                                               else throwError $ SE(pos, procedureHasNonUnitRetType $ TSym.name namesym)
-                                                                 Just (rettysym, rettypos) -> case Map.lookup rettysym t of
-                                                                                                 Just retty -> do actualretty <- actualTy pos retty
-                                                                                                                  if actualretty == bodyTy 
-                                                                                                                     then liftIO $ TTran.createProcFrag funlab funlvl bodyge
-                                                                                                                     else throwError $ SE(pos, functionRetBodyTypeMismatch $ TSym.name namesym)
-                                                                                                 Nothing -> throwError $ SE(rettypos, undefinedFuncRetType $ TSym.name namesym)
-                                                        tfieldToTy tenv (TAbsyn.Tfield {TAbsyn.tfieldName=_
-                                                                                       ,TAbsyn.tfieldTyp=s
-                                                                                       ,TAbsyn.tfieldPos=pos}) = do if s `Map.member` tenv
-                                                                                                                       then return $ fromJust $ Map.lookup s tenv
-                                                                                                                       else throwError $ SE(pos, undefinedFuncParamType)
--- Variable declaration
-transDec level breakLab TAbsyn.VarDec{TAbsyn.varDecVar=vardec
-                                     ,TAbsyn.varDecTyp=maybetype
-                                     ,TAbsyn.varDecInit=initexp
-                                     ,TAbsyn.varDecPos=pos} = 
-  do (initge, initty) <- transExp level breakLab initexp
-     let variablenamesym = TAbsyn.vardecName vardec
-     (v, t, _, _) <- get
-     access <- liftIO $ TTran.allocInFrame level
-     let varentry = VarEntry{varAccess=access, varTy=initty, varReadOnly=False}
-     simplevar <- liftIO $ TTran.simpleVar access level
-     assigngexp <- liftIO $ TTran.assign simplevar initge
-     case maybetype of
-       Nothing -> do let v' = Map.insert variablenamesym varentry v
-                     return (v', t, [assigngexp])
-       Just (varty, varpos) -> case Map.lookup varty t of
-                                 Nothing -> throwError $ SE(varpos, undefinedVarDecType $ TSym.name varty)
-                                 Just ty -> do actualty <- actualTy pos ty
-                                               if (actualty == initty)
-                                                  then do let v' = Map.insert variablenamesym varentry v
-                                                          return (v', t, [assigngexp])
-                                                  else throwError $ SE(pos, variableInitDeclaredTypeMismatch $ TSym.name variablenamesym)
--- Type declaration
-transDec _ _ (TAbsyn.TypeDec decs) = 
-  do (v, t, _, _) <- get
-     let typenames = map TAbsyn.typedecName decs
-     let typeposes = map TAbsyn.typedecPos decs
-     mapM_ checkTypeName $ zip typenames typeposes
-     refNothings <- mapM (\_ -> liftIO $ newIORef Nothing) decs
-     let tempNameTypes = zipWith (\namesym -> \refnothing -> TSTy.Name(namesym, refnothing)) typenames refNothings
-     let t' = foldr (insert') t (zip typenames tempNameTypes)
-     let absyntys = map TAbsyn.typedecTy decs
-     tys <- mapM (withBinding v t' . transTy) absyntys
-     mapM_ rewriteRefNothing $ zip refNothings tys
-     return (v, t', [])
-   where insert' (k, v)= Map.insert k v
-         rewriteRefNothing (refNothing, ty) = liftIO $ writeIORef refNothing $ Just ty
-         checkTypeName (typename, pos) = do (_, t, _, _) <- get
-                                            if typename `Map.member` t
-                                               then throwError $ SE(pos, redefiningType $ TSym.name typename)
-                                               else return ()
+                 builtinfuncsyms <- mapM TSym.symbol builtinfuncnames
+                 builtinfunclabs <- mapM TTmp.namedLabel builtinfuncnames
+                 let builtinfunclvls = take (length builtinfuncsyms) $ repeat TTra.outerMost
+                 let paramtyswithdummyaccess = liftM (map (\ty -> (ty, (TTra.outerMost, 0)))) builtinparamtys
+                 _ <- zipWithM5 addfunctiontobinding builtinfuncsyms builtinfunclvls builtinfunclabs paramtyswithdummyaccess builtinfunctys
 
-transTy :: TAbsyn.Ty -> SemantState TSTy.Ty
-transTy (TAbsyn.NameTy(namesymbol, pos)) = do (_, t, _, _) <- get
-                                              case Map.lookup namesymbol t of
-                                                Nothing -> throwError $ SE(pos, undefinedTypeInNameTy $ TSym.name namesymbol)
-                                                Just ty -> return ty
-transTy (TAbsyn.ArrayTy(namesymbol, pos)) = do (_, t, _, _) <- get
-                                               case Map.lookup namesymbol t of
-                                                 Nothing -> throwError $ SE(pos, undefinedTypeInArrayTy $ TSym.name namesymbol)
-                                                 Just ty -> do u <- genUnique
-                                                               return $ TSTy.Array(ty, u)
-transTy (TAbsyn.RecordTy tfields) = do (_, t, _, _) <- get
-                                       let names = map TAbsyn.tfieldName tfields
-                                       let types = map TAbsyn.tfieldTyp  tfields
-                                       let positions = map TAbsyn.tfieldPos tfields
-                                       if all (checkExistence t) types
-                                          then do let sementtys = map fromJust $ map (flip (Map.lookup) t) types
-                                                  u <- genUnique
-                                                  return $ TSTy.Record(zip names sementtys, u)
-                                          else do let (Just nonexistentty) = find (not . checkExistence t) types
-                                                  let (Just idx) = nonexistentty `elemIndex` types
-                                                  throwError $ SE(positions!!idx, undefinedTypeInRecordTy $ TSym.name (types!!idx))
-                                    where checkExistence tenv name = if name `Map.member` tenv then True else False
-
-
-
-transProg' :: SemantStates -> TAbsyn.Program -> IO(Either SemantError [TTran.Frag])
-transProg' initialS (TAbsyn.Pexp e) = do (tigerMainLevel,_) <- liftIO $ TTran.newLevel TTran.outerMost []
-                                         errorOrTy <- runExceptT $ evalStateT (transExp tigerMainLevel Nothing e) initialS
-                                         case errorOrTy of
-                                           Left err -> return $ Left err
-                                           Right (ge, _) -> do liftIO $ TTran.createMainFrag tigerMainLevel ge
-                                                               frags <- liftIO $ TTran.getResult
-                                                               return $ Right frags
-transProg' initialS (TAbsyn.Pdecs (d:decs)) = do (tigerMainLevel,_) <- liftIO $ TTran.newLevel TTran.outerMost []
-                                                 errorOrResSt <- runExceptT $ runStateT (transDec tigerMainLevel Nothing d) initialS
-                                                 case errorOrResSt of
-                                                   Left err -> return $ Left err
-                                                   Right (_, s) -> transProg' s (TAbsyn.Pdecs decs)
-transProg' _ (TAbsyn.Pdecs []) = do frags <- liftIO $ TTran.getResult
-                                    return $ Right frags
-
-transProg :: TAbsyn.Program -> IO (Either SemantError [TTran.Frag])
-transProg prog = do intsym       <- TSym.symbol "int"
-                    stringsym    <- TSym.symbol "string"
-                    printsym     <- TSym.symbol "print"
-                    flushsym     <- TSym.symbol "flush"
-                    getcharsym   <- TSym.symbol "getchar"
-                    ordsym       <- TSym.symbol "ord"
-                    chrsym       <- TSym.symbol "chr"
-                    sizesym      <- TSym.symbol "size"
-                    substringsym <- TSym.symbol "substring"
-                    concatsym    <- TSym.symbol "concat"
-                    notsym       <- TSym.symbol "not"
-                    exitsym      <- TSym.symbol "exit"
-
-                    printlab     <- TTmp.namedLabel "print"
-                    flushlab     <- TTmp.namedLabel "flush"
-                    getcharlab   <- TTmp.namedLabel "getchar"
-                    ordlab       <- TTmp.namedLabel "ord"
-                    chrlab       <- TTmp.namedLabel "chr"
-                    sizelab      <- TTmp.namedLabel "size"
-                    substringlab <- TTmp.namedLabel "substring"
-                    concatlab    <- TTmp.namedLabel "concat"
-                    notlab       <- TTmp.namedLabel "not"
-                    exitlab      <- TTmp.namedLabel "exit"
-                    let insert' (sym, ty) = Map.insert sym ty
-                    let initialVenv = foldr insert' Map.empty [(printsym,FunEntry { funLabel=printlab
-                                                                                  , funLevel=TTran.outerMost
-                                                                                  , funFormals=map addDummyAccess [TSTy.String], funResult=TSTy.Unit } )
-                                                              ,(flushsym,FunEntry { funLabel=flushlab
-                                                                                  , funLevel=TTran.outerMost
-                                                                                  , funFormals =[], funResult=TSTy.Unit   } )
-                                                              ,(getcharsym,FunEntry { funLabel=getcharlab
-                                                                                    , funLevel=TTran.outerMost
-                                                                                    , funFormals =[], funResult=TSTy.String } )
-                                                              ,(ordsym,FunEntry { funLabel=ordlab
-                                                                                , funLevel=TTran.outerMost
-                                                                                , funFormals =map addDummyAccess [TSTy.String], funResult=TSTy.INT    } )
-                                                              ,(chrsym,FunEntry { funLabel=chrlab
-                                                                                , funLevel=TTran.outerMost
-                                                                                , funFormals =map addDummyAccess [TSTy.INT], funResult=TSTy.String } )
-                                                              ,(sizesym,FunEntry { funLabel=sizelab
-                                                                                 , funLevel=TTran.outerMost
-                                                                                 , funFormals =map addDummyAccess [TSTy.String], funResult=TSTy.INT} )
-                                                              ,(substringsym,FunEntry { funLabel=substringlab
-                                                                                      , funLevel=TTran.outerMost
-                                                                                      , funFormals =map addDummyAccess [TSTy.String, TSTy.INT, TSTy.INT], funResult=TSTy.String } )
-                                                              ,(concatsym,FunEntry { funLabel=concatlab
-                                                                                   , funLevel=TTran.outerMost
-                                                                                   , funFormals =map addDummyAccess [TSTy.String, TSTy.String], funResult=TSTy.String } )
-                                                              ,(notsym,FunEntry { funLabel=notlab
-                                                                                , funLevel=TTran.outerMost
-                                                                                , funFormals =map addDummyAccess [TSTy.INT], funResult=TSTy.INT    } )
-                                                              ,(exitsym,FunEntry { funLabel=exitlab
-                                                                                 , funLevel=TTran.outerMost
-                                                                                 , funFormals =map addDummyAccess [TSTy.INT], funResult=TSTy.Unit   } ) ]
-                    let initialTenv = foldr insert' Map.empty [(intsym, TSTy.INT), 
-                                                               (stringsym, TSTy.String)]
-                    let emptyState = (initialVenv, initialTenv, 0 :: TSTy.Uniq, 0)
-                    transProg' emptyState prog
-  where addDummyAccess ty = (ty, (TTran.outerMost, 0))
+                 absyn <- TPar.parser
+                 case absyn of
+                   TAbs.Pexp e -> do (mainlvl,_) <- TTra.newLevel TTra.outerMost []
+                                     (gexp, _) <- transexp mainlvl Nothing e
+                                     TTra.createMainFrag mainlvl gexp
+                                     frags <- TTra.getResult
+                                     return frags
+                   TAbs.Pdecs (ds) -> do (mainlvl,_) <- TTra.newLevel TTra.outerMost []
+                                         transprog' mainlvl ds
+                                         frags <- TTra.getResult
+                                         return frags
+  where transprog' mainlvl (d:decs) = do (v, t, _) <- transdec mainlvl Nothing d
+                                         withBinding v t $ transprog' mainlvl decs
+                                         return ()
+        transprog' _ _ = return ()

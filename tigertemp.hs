@@ -1,45 +1,27 @@
 module TigerTemp
-       ( 
-         Temp(..)
-       , Label
-       , newTemp
-       , newLabel
-       , namedLabel
-       )
-       where
+  (
+    Label
+  , Temp (..)
+  , newTemp
+  , newLabel
+  , namedLabel
+  )
+  where
 
-import Data.IORef
 import TigerSymbol
-import TigerRegisters
-import Distribution.Simple.Utils (lowercase)
-import System.IO.Unsafe
+import FrontEnd
+import Text.Parsec
 
-data Temp  = Temp Int
-           | Named Register
-             deriving (Eq)
-type Label = Symbol
 
-instance Show Temp where
-  show (Temp num) = "T" ++ show num
-  show (Named reg) = lowercase $ show reg
+newTemp :: Frontend Temp
+newTemp = do (m, c, tc, lc, u) <- getState
+             putState (m, c, tc+1, lc, u)
+             return $ Temp tc
 
-tempCount :: IORef Int
-{-# NOINLINE tempCount #-}
-tempCount  = unsafePerformIO $ newIORef 0
+newLabel :: Frontend Label
+newLabel = do (m, c, tc, lc, u) <- getState
+              putState (m, c, tc, lc+1, u)
+              symbol $ "L"++show lc
 
-labCount :: IORef Int
-{-# NOINLINE labCount #-}
-labCount = unsafePerformIO $ newIORef 0
-
-newTemp :: IO Temp
-newTemp = do c <- readIORef tempCount
-             writeIORef tempCount (c+1)
-             return $ Temp c
-
-newLabel :: IO Label
-newLabel = do c <- readIORef labCount
-              writeIORef labCount (c+1)
-              symbol $ "L" ++ show c
-
-namedLabel :: String -> IO Label
-namedLabel = symbol
+namedLabel :: String -> Frontend Label
+namedLabel = TigerSymbol.symbol
