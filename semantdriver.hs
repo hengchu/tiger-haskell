@@ -18,4 +18,7 @@ main = do args <- getArgs
                             let exceptmonad = evalStateT statemonad Frt.initialSemantState
                             let iomonad = runExceptT exceptmonad
                             stuff <- iomonad
-                            print stuff
+                            case stuff of
+                              Left parserr -> print parserr
+                              Right (Left semanterr) -> print semanterr
+                              Right (Right frags) -> mapM_ (putStr . Frt.prettyprintfrag) frags >> putStr "\n"
