@@ -11,5 +11,5 @@ I am very new to Haskell and I probably make a lot of mistakes. If you spot
 anything bad, please let me know! I would greatly appreciate it!
 
 # Current progress
-Re-implementing everything from Frontend to IR translation to get rid
-of `unsafePerformIO` hacks. Temporarily unbuildable.
+IR translation is done. You can run `make semantdriver` to get an executable,
+it will type check a tiger source file and print out the intermediate language.
