@@ -1,6 +1,10 @@
-import qualified TigerSemant as TS
+import qualified TigerSemant2 as TS
 import qualified TigerLexer  as TLex
-import qualified TigerParser as TP
+import qualified TigerParser2 as TP
+import Text.Parsec
+import qualified FrontEnd as Frt
+import Control.Monad.State
+import Control.Monad.Except
 import System.Environment
 
 main :: IO ()
@@ -10,10 +14,8 @@ main = do args <- getArgs
           let eithertoken = TLex.scanner fileContent
           case eithertoken of
             Left lexerr -> print lexerr
-            Right tokens -> do parseresult <- TP.parse tokens
-                               case parseresult of
-                                 Left parseError -> print parseError
-                                 Right absyn -> do analysis <- TS.transProg absyn
-                                                   case analysis of
-                                                     Left semanterr -> print semanterr
-                                                     Right frags -> mapM_ print frags
+            Right tok -> do let statemonad = runPT TS.transprog Frt.initialSymbolTempState file (map TP.token2ptoken tok)
+                            let exceptmonad = evalStateT statemonad Frt.initialSemantState
+                            let iomonad = runExceptT exceptmonad
+                            stuff <- iomonad
+                            print stuff

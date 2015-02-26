@@ -30,6 +30,8 @@ module FrontEnd
   , Tenv
   , LoopLevel
   , Uniq
+  , initialSymbolTempState
+  , initialSemantState
   )
   where
 
@@ -56,6 +58,27 @@ data Ty = Record ([(Symbol, Ty)], Uniq)
         | Name (Symbol, IORef (Maybe Ty))
         | Unit
 
+instance Show Ty where
+  show (Record (sts, u)) = "Record: (" ++ show sts ++ ", " ++ show u ++ ")"
+  show Nil = "Nil"
+  show INT = "Int"
+  show String = "String"
+  show (Array(t, u)) = "Array: (" ++ show t ++ ", " ++ show u ++ ")"
+  show (Name(s, _)) = "Name: " ++ show s
+  show Unit = "Unit"
+
+instance Eq Ty where
+  (Record _)           == Nil               = True
+  Nil                  == (Record _)        = True
+  Record (stypairs, u) == Record (stypairs', u') = stypairs == stypairs' && u == u'
+  Nil                  == Nil               = True
+  INT                  == INT               = True
+  String               == String            = True
+  Array (t, u)         == Array (t', u')    = t == t' && u == u'
+  Name (s, ioref)      == Name (s', ioref') = s == s' && ioref == ioref'
+  Unit                 == Unit              = True
+  _ == _ = False
+
 -- These are the entries of the environment mappings during type checking.
 data EnvEntry = VarEntry { varAccess :: Access
                          , varTy::Ty
@@ -64,6 +87,7 @@ data EnvEntry = VarEntry { varAccess :: Access
                          , funLabel :: Label
                          , funFormals::[(Ty, Access)]
                          , funResult::Ty}
+  deriving(Show)
 
 -- Environment mappings.
 type Venv = Map.Map Symbol EnvEntry
@@ -78,6 +102,9 @@ type SemantState = ( Venv   -- ^ variable map
                    , [Frag] -- ^ frag list
                    ) 
 
+initialSemantState :: SemantState
+initialSemantState = (Map.empty, Map.empty, 0, [])
+
 -- Types of errors semant can generate.
 data SemantErrorClass = TypeMismatch String String
                       | TypeLoop     [String]
@@ -86,6 +113,9 @@ data SemantErrorClass = TypeMismatch String String
                       | Undefined    String
                       | ArgumentCount Int Int
                       | ArgumentName String String
+                      | BreakOutsideOfLoop
+                      | DuplicateDefinition String
+                      | NotVariable String
   deriving(Show, Eq)
 
 -- The actual error type.
@@ -105,6 +135,10 @@ type SymbolTempState = ( Map.Map String Int -- ^ Map from string to symbol num
                        , Int                -- ^ Temp Count
                        , Int                -- ^ Label Count
                        , Integer )          -- ^ Uniq Gen
+
+initialSymbolTempState :: SymbolTempState
+initialSymbolTempState = (Map.empty, 0, 0, 0, 0)
+
 
 -- The Frontend monad.
 type Frontend = ParsecT [PToken] SymbolTempState Semant
@@ -132,7 +166,7 @@ data Level = LEVEL { levelFrame :: Frame
                    , levelParent :: Level
                    , levelUniq :: Uniq }
            | TOP
-           deriving (Eq)
+           deriving (Show, Eq)
 
 type Offset = Int
 data Frame  = Frame { frameFormals     :: Int

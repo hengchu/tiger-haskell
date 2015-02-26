@@ -15,6 +15,7 @@ import Text.Parsec.Expr
 import TigerSymbol2 (symbol, Symbol)
 import Control.Applicative ((<|>), (<*), (*>))
 import Control.Monad
+import Control.Monad.IO.Class
 
 class Position a where
   extractPosition :: a -> AlexPosn
@@ -141,7 +142,7 @@ pExpTerm =  try pSeqExp
         <|> try pStr
         <|> try pNum
         <|> try pNil
-        <|> (try $ between (parseSimpleToken LPAREN) (parseSimpleToken RPAREN) expr)
+        <|> between (parseSimpleToken LPAREN) (parseSimpleToken RPAREN) expr
 
 pNum = do (p, num) <- parseNumber
           return $ IntExp (num, extractPosition p)
@@ -154,7 +155,7 @@ pStr = do (p, str) <- parseString
 
 pArrayCreation =
   do (p, typeid) <- parseId
-     szexp <- between (parseSimpleToken LPAREN) (parseSimpleToken RPAREN) expr
+     szexp <- between (parseSimpleToken LBRAK) (parseSimpleToken RBRAK) expr
      parseSimpleToken OF
      initexp <- expr
      typeidsymbol <- symbol typeid
@@ -278,7 +279,7 @@ pBreak =
      return BreakExp { breakPos = extractPosition breaktok }
 
 pSeqExp =
-  do es <- expr `sepBy` (parseSimpleToken SEMICOLON)
+  do es <- between (parseSimpleToken LPAREN) (parseSimpleToken RPAREN) $ expr `sepBy` (parseSimpleToken SEMICOLON)
      return $ SeqExp $ zip es $ map extractPosition es
 
 pVardec = 
@@ -304,10 +305,11 @@ pLet =
   do lettok <- parseSimpleToken LET
      decs <- pDecs
      parseSimpleToken IN
-     e <- pSeqExp
+     es <- expr `sepBy` (parseSimpleToken SEMICOLON)
+     let poses = map extractPosition es
      parseSimpleToken END
      return $ LetExp { letDecs=decs
-                     , letBody=e
+                     , letBody= SeqExp $ zip es poses
                      , letPos=extractPosition lettok }
 
 pDecs = many pDec
@@ -342,7 +344,7 @@ pTypeDec =
   do typetok <- parseSimpleToken TYPE
      (_, typeid) <- parseId
      parseSimpleToken EQ
-     (_, tyid) <- parseId
+     -- (_, tyid) <- parseId
      typeidsym <- symbol typeid
      ty <- pTy
      return Typedec { typedecName=typeidsym
