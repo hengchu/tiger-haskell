@@ -33,6 +33,8 @@ module FrontEnd
   , initialSymbolTempState
   , initialSemantState
   , prettyprintfrag
+  , prettyprintstm
+  , notrel
   )
   where
 
@@ -46,6 +48,7 @@ import Data.IORef
 import qualified Data.Map as Map
 import qualified TigerLexer as TLex
 import Distribution.Simple.Utils (lowercase)
+import Prelude hiding (EQ, LT, GT)
 
 -- This is a uniq number generator for the entire frontend.
 type Uniq = Integer
@@ -245,6 +248,24 @@ data Cvtop = CVTSU | CVTSS | CVTSF | CVTUU
            | CVTUS | CVTFS | CVTFF
          deriving (Show, Eq)
 
+notrel EQ = NE
+notrel NE = EQ
+notrel LT = GE
+notrel GT = LE
+notrel LE = GT
+notrel GE = LT
+notrel ULT = UGE
+notrel ULE = UGT
+notrel UGT = ULE
+notrel UGE = ULT
+notrel FEQ = FNE
+notrel FNE = FEQ
+notrel FLT = FGE
+notrel FLE = FGT
+notrel FGT = FLE
+notrel FGE = FLT
+
+-- Pretty printer
 prettyprintstm :: Stm -> String
 prettyprintstm s = execState (prettyprintstm' s) ""
 
@@ -262,7 +283,7 @@ prettyprintstm' s =
     stm :: Stm -> Int -> Control.Monad.State.State String ()
     stm (SEQ(a, b)) d = indent d >> sayln "SEQ(" >> (stm a $ d+1)
                                  >> sayln " " >> (stm b $ d+1) >> say ")"
-    stm (LABEL lab) d = indent d >> say "LABEL" >> (say $ fst lab)
+    stm (LABEL lab) d = indent d >> (say $ fst lab ++ ":")
     stm (JUMP(e, _)) d = indent d >> sayln "JUMP(" >> (exp e $ d+1) >> say ")"
     stm (CJUMP(TEST(r, a, b), t, f)) d = do indent d
                                             sayln "CJUMP("
