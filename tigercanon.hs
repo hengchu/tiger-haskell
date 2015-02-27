@@ -1,3 +1,6 @@
+-- Much of the code in this file is adapted from
+-- the ML version at here: http://www.cs.princeton.edu/~appel/modern/ml/chap8/canon.sml
+
 module TigerCanon
   (
     linearize
