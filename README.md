@@ -14,6 +14,9 @@ anything bad, please let me know! I would greatly appreciate it!
 IR translation is done. You can run `make semantdriver` to get an executable,
 it will type check a tiger source file and print out the intermediate language.
 
+I am working on the module that emits x86 assembly code now and hopefully I'll
+soon get a compiler that emits executable code.
+
 I recently cleaned up the project of bad dependencies, and made a dependency
 graph of the important modules in the project. It's still not as pretty as I
 would like it to be, but you can check it out here:
