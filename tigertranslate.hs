@@ -39,16 +39,18 @@ module TigerTranslate
   , nilGexp
   ) where
 
-import qualified TigerFrame as Frame
+import TigerITree
+import TigerSemTr
 import qualified TigerTemp as Tmp
+import qualified TigerFrame as Frame
 import qualified TigerAbsyn as Absyn
 import qualified TigerRegisters as Reg
-import Control.Monad.IO.Class
-import FrontEnd
+import Control.Monad.State
+import Prelude hiding (EQ, LT, GT)
 
 data Gexp = Ex Exp
           | Nx Stm
-          | Cx (Label -> Label -> Stm)
+          | Cx (Tmp.Label -> Tmp.Label -> Stm)
              -- True label   False label
 
 outerMost :: Level
@@ -57,7 +59,7 @@ outerMost = TOP
 nilGexp :: Gexp
 nilGexp = Ex $ CONST(0)
 
-newLevel :: Level -> [a] -> Frontend (Level, [(a, Access)])
+newLevel :: Level -> [a] -> SemTr (Level, [(a, Access)])
 newLevel parent formals =
   do let numformals = length formals
      (frame, (slOffset:offsets)) <- liftIO $ Frame.newFrame (numformals+1)
@@ -81,11 +83,11 @@ seqcon (x:[]) = x
 seqcon (x:xs) = SEQ(x, seqcon xs)
 seqcon []     = error "Compiler error: Impossible usage of seqcon"
 
-unEx :: Gexp -> Frontend (Exp)
+unEx :: Gexp -> SemTr (Exp)
 unEx (Ex e)      = return e
-unEx (Cx genstm) = do r <- Tmp.newTemp
-                      t <- Tmp.newLabel
-                      f <- Tmp.newLabel
+unEx (Cx genstm) = do r <- newTemp
+                      t <- newLabel
+                      f <- newLabel
                       return $ ESEQ(seqcon
                                        [ MOVE(TEMP r, CONST 1)
                                        , genstm t f
@@ -95,14 +97,14 @@ unEx (Cx genstm) = do r <- Tmp.newTemp
                                        ], TEMP r)
 unEx (Nx s)      = return $ ESEQ(s, CONST 0)
 
-unCx :: Gexp -> Frontend (Tmp.Label -> Tmp.Label -> Stm)
+unCx :: Gexp -> SemTr (Tmp.Label -> Tmp.Label -> Stm)
 unCx (Ex (CONST(1))) = return $ (\t -> \_ -> JUMP(NAME(t), [t]))
 unCx (Ex (CONST(0))) = return $ (\_ -> \f -> JUMP(NAME(f), [f]))
 unCx (Ex e) = return $ (\t -> \f -> CJUMP(TEST(NE, e, CONST 0), t, f))
 unCx (Cx genstm) = return genstm
 unCx (Nx _) = error "Compiler error: Impossible usage of unCx"
 
-unNx :: Gexp -> Frontend (Stm)
+unNx :: Gexp -> SemTr (Stm)
 unNx (Ex e) = return $ EXP e
 unNx (Nx stm) = return stm
 unNx c = do e <- unEx c
@@ -111,64 +113,64 @@ unNx c = do e <- unEx c
 
 
 -- Cx-constructed expression comparing two strings for equality
-eqStr :: Gexp -> Gexp -> Frontend Gexp
+eqStr :: Gexp -> Gexp -> SemTr Gexp
 eqStr str1 str2 = 
   do str1' <- unEx str1
      str2' <- unEx str2
-     funclabel <- Tmp.namedLabel "stringEqual"
+     funclabel <- namedLabel "stringEqual"
      return $ Ex $ CALL (NAME funclabel,
                             [str1', str2'])
 
-notEqStr :: Gexp -> Gexp -> Frontend Gexp
+notEqStr :: Gexp -> Gexp -> SemTr Gexp
 notEqStr str1 str2 = 
   do (Ex eqstr) <- eqStr str1 str2
      return $ Cx $ \t -> 
-                   \f -> CJUMP(TEST (FrontEnd.EQ, eqstr, CONST(0)), t, f)
+                   \f -> CJUMP(TEST (EQ, eqstr, CONST(0)), t, f)
                         
 
-strLessThan :: Gexp -> Gexp -> Frontend Gexp
+strLessThan :: Gexp -> Gexp -> SemTr Gexp
 strLessThan str1 str2 = 
   do str1' <- unEx str1
      str2' <- unEx str2
-     funclabel <- Tmp.namedLabel "stringLessThan"
+     funclabel <- namedLabel "stringLessThan"
      return $ Ex $ CALL (NAME funclabel,
                             [str1', str2'])
 
-strLessThanOrEq :: Gexp -> Gexp -> Frontend Gexp
+strLessThanOrEq :: Gexp -> Gexp -> SemTr Gexp
 strLessThanOrEq str1 str2 = 
-  do lab <- Tmp.newLabel
+  do lab <- newLabel
      Ex eq <- eqStr str1 str2
      Ex lt <- strLessThan str1 str2
      return $ Cx $ \t ->
-                   \f -> seqcon [ CJUMP (TEST (FrontEnd.EQ, eq, CONST 0), lab, t)
+                   \f -> seqcon [ CJUMP (TEST (EQ, eq, CONST 0), lab, t)
                                 , LABEL lab
-                                , CJUMP (TEST (FrontEnd.EQ, lt, CONST 0), f, t)]
+                                , CJUMP (TEST (EQ, lt, CONST 0), f, t)]
                                
 
 
 -- Comparing non-string values
-eqCmp :: Gexp -> Gexp -> Frontend Gexp
+eqCmp :: Gexp -> Gexp -> SemTr Gexp
 eqCmp g1 g2 = 
   do g1' <- unEx g1
      g2' <- unEx g2
      return $ Cx $ \t ->
-                   \f -> CJUMP(TEST (FrontEnd.EQ, g1', g2'), t, f)
+                   \f -> CJUMP(TEST (EQ, g1', g2'), t, f)
  
-notEqCmp :: Gexp -> Gexp -> Frontend Gexp
+notEqCmp :: Gexp -> Gexp -> SemTr Gexp
 notEqCmp g1 g2 =
   do g1' <- unEx g1
      g2' <- unEx g2
      return $ Cx $ \t ->
                    \f -> CJUMP(TEST (NE, g1', g2'), t, f)
 
-lessThan :: Gexp -> Gexp -> Frontend Gexp
+lessThan :: Gexp -> Gexp -> SemTr Gexp
 lessThan g1 g2 =
   do g1' <- unEx g1
      g2' <- unEx g2
      return $ Cx $ \t ->
-                   \f -> CJUMP(TEST (FrontEnd.LT, g1', g2'), t, f)
+                   \f -> CJUMP(TEST (LT, g1', g2'), t, f)
 
-lessThanOrEq :: Gexp -> Gexp -> Frontend Gexp
+lessThanOrEq :: Gexp -> Gexp -> SemTr Gexp
 lessThanOrEq g1 g2 =
   do g1' <- unEx g1
      g2' <- unEx g2
@@ -176,7 +178,7 @@ lessThanOrEq g1 g2 =
                    \f -> CJUMP(TEST (LE, g1', g2'), t, f)
 
 -- Arithmetic
-arithmetic :: Absyn.Oper -> Gexp -> Gexp -> Frontend Gexp
+arithmetic :: Absyn.Oper -> Gexp -> Gexp -> SemTr Gexp
 arithmetic op g1 g2 =
   do g1' <- unEx g1
      g2' <- unEx g2
@@ -190,26 +192,26 @@ arithmetic op g1 g2 =
         transop o              = error $ "Compiler error : " ++ show o ++ "not implemented yet"
 
 -- Literal
-intExp :: Int -> Frontend Gexp
+intExp :: Int -> SemTr Gexp
 intExp val = return $ Ex $ CONST val
 
-stringExp :: String -> Frontend Gexp
+stringExp :: String -> SemTr Gexp
 stringExp str =
-  do lab <- Tmp.newLabel
+  do lab <- newLabel
      let frag = Frame.DATA lab str
-     (v, t, l, frags) <- semantStGet
-     semantStPut (v, t, l, frag:frags)
+     frags <- getFragList
+     putFragList $ frag:frags
      return $ Ex $ NAME lab
 
 
 -- Helper sequence function
-constructEseq :: Gexp -> Gexp -> Frontend Gexp
+constructEseq :: Gexp -> Gexp -> SemTr Gexp
 constructEseq stm e =
   do stm' <- unNx stm
      exp' <- unEx e
      return $ Ex $ ESEQ (stm', exp')
 
-letExpression :: [Gexp] -> Gexp -> Frontend Gexp
+letExpression :: [Gexp] -> Gexp -> SemTr Gexp
 letExpression []   body = return body
 letExpression decs body =
   do decs' <- mapM unNx decs
@@ -217,17 +219,17 @@ letExpression decs body =
      return $ Ex $ ESEQ (seqcon decs', body')
 
 -- Assignment
-assign :: Gexp -> Gexp -> Frontend Gexp
+assign :: Gexp -> Gexp -> SemTr Gexp
 assign var assgnval =
   do var' <- unEx var
      assgnval' <- unEx assgnval
      return $ Nx $ MOVE (var', assgnval')
 
 -- Record and Array creation
-createRecord :: [Gexp] -> Frontend Gexp
+createRecord :: [Gexp] -> SemTr Gexp
 createRecord fieldvars =
-  do address <- Tmp.newTemp
-     allocfunlab <- Tmp.namedLabel "allocRecord"
+  do address <- newTemp
+     allocfunlab <- namedLabel "allocRecord"
      let alloc = MOVE(TEMP address, CALL (NAME allocfunlab, [CONST $ 4 * length fieldvars]))
      let idxs  = [1..length fieldvars]
      instrs <- mapM (uncurry $ initfield address) $ zip fieldvars idxs
@@ -237,28 +239,28 @@ createRecord fieldvars =
                                             let addr = MEM (BINOP(PLUS, baseaddr, CONST $ idx * 4), 4)
                                             return $ MOVE (addr, fieldvar')
 
-createArray :: Gexp -> Gexp -> Frontend Gexp
+createArray :: Gexp -> Gexp -> SemTr Gexp
 createArray sizexp initexp =
   do sizexp'  <- unEx sizexp
      initexp' <- unEx initexp
-     allocarrfun <- Tmp.namedLabel "allocArray"
+     allocarrfun <- namedLabel "allocArray"
      return $ Ex $ CALL (NAME allocarrfun, [sizexp', initexp'])
 
 -- Variable access
-field :: Gexp -> Int -> Frontend Gexp
+field :: Gexp -> Int -> SemTr Gexp
 field recordge fieldnum =
-  do fieldfunlab <- Tmp.namedLabel "field"
+  do fieldfunlab <- namedLabel "field"
      recordge'   <- unEx recordge
      return $ Ex $ CALL (NAME fieldfunlab, [recordge', CONST fieldnum])
 
-subscript :: Gexp -> Gexp -> Frontend Gexp
+subscript :: Gexp -> Gexp -> SemTr Gexp
 subscript arrge idxge =
   do arrge' <- unEx arrge
      idxge' <- unEx idxge
-     subscriptfunlab <- Tmp.namedLabel "subscript"
+     subscriptfunlab <- namedLabel "subscript"
      return $ Ex $ CALL (NAME subscriptfunlab, [arrge', idxge'])
 
-simpleVar :: Access -> Level -> Frontend Gexp
+simpleVar :: Access -> Level -> SemTr Gexp
 simpleVar (varlevel, offset) fromLevel =
   return $ Ex $ accessFrameOff offset (frameAtLevel varlevel fromLevel $ TEMP $ Tmp.Named Reg.EBP)
 
@@ -274,26 +276,26 @@ accessFrameOff :: Int -> Exp -> Exp
 accessFrameOff offset frameptr = MEM(BINOP (PLUS, frameptr, CONST offset), 4)
 
 -- Conditional and loops
-ifThen :: Gexp -> Gexp -> Frontend Gexp
+ifThen :: Gexp -> Gexp -> SemTr Gexp
 ifThen testge thenge =
   do testge' <- unCx testge
      thenge' <- unNx thenge
-     t <- Tmp.newLabel
-     f <- Tmp.newLabel
+     t <- newLabel
+     f <- newLabel
      return $ Nx $ seqcon [(testge' t f), LABEL t, thenge', LABEL f]
 
-ifThenElse :: Gexp -> Gexp -> Gexp -> Frontend Gexp
+ifThenElse :: Gexp -> Gexp -> Gexp -> SemTr Gexp
 ifThenElse testge (Nx thenstm) (Nx elsestm) =
   do testge' <- unCx testge
-     t <- Tmp.newLabel
-     f <- Tmp.newLabel
+     t <- newLabel
+     f <- newLabel
      return $ Nx $ seqcon [testge' t f, LABEL t, thenstm, LABEL f, elsestm]
 ifThenElse testge thenge elsege =
   do testge' <- unCx testge
-     t <- Tmp.newLabel
-     f <- Tmp.newLabel
-     j <- Tmp.newLabel
-     r <- Tmp.newTemp
+     t <- newLabel
+     f <- newLabel
+     j <- newLabel
+     r <- newTemp
      thenge' <- unEx thenge
      elsege' <- unEx elsege
      return $ Ex $ ESEQ (
@@ -308,12 +310,12 @@ ifThenElse testge thenge elsege =
                              ]
                            , TEMP r)
 
-whileLoop :: Gexp -> Gexp -> Tmp.Label -> Frontend Gexp
+whileLoop :: Gexp -> Gexp -> Tmp.Label -> SemTr Gexp
 whileLoop testge bodyge donelab =
   do testge' <- unCx testge
      bodyge' <- unNx bodyge
-     testlab <- Tmp.newLabel
-     bodylab <- Tmp.newLabel
+     testlab <- newLabel
+     bodylab <- newLabel
      return $ Nx $ seqcon [ LABEL testlab
                           , testge' bodylab donelab
                           , LABEL bodylab
@@ -321,32 +323,32 @@ whileLoop testge bodyge donelab =
                           , JUMP (NAME testlab, [testlab])
                           , LABEL donelab ]
 
-forLoop :: Gexp -> Gexp -> Gexp -> Tmp.Label -> Gexp -> Frontend Gexp
+forLoop :: Gexp -> Gexp -> Gexp -> Tmp.Label -> Gexp -> SemTr Gexp
 forLoop loge hige bodyge donelab iteratorge =
   do loge' <- unEx loge
      hige' <- unEx hige
      bodyge' <- unNx bodyge
      iteratorge' <- unEx iteratorge
-     limit <- Tmp.newTemp
-     bodylab <- Tmp.newLabel
-     inclab  <- Tmp.newLabel
+     limit <- newTemp
+     bodylab <- newLabel
+     inclab  <- newLabel
      return $ Nx $ seqcon [ MOVE(iteratorge', loge')
                           , MOVE(TEMP limit, hige')
                           , CJUMP (TEST (LE, iteratorge', TEMP limit), bodylab, donelab)
                           , LABEL bodylab
                           , bodyge'
-                          , CJUMP (TEST(FrontEnd.LT, iteratorge', TEMP limit), inclab, donelab)
+                          , CJUMP (TEST(LT, iteratorge', TEMP limit), inclab, donelab)
                           , LABEL inclab
                           , MOVE(iteratorge', BINOP(PLUS, iteratorge', CONST 1))
                           , JUMP(NAME bodylab, [bodylab])
                           , LABEL donelab
                           ]
 
-break :: Tmp.Label -> Frontend Gexp
+break :: Tmp.Label -> SemTr Gexp
 break lab =
   return $ Nx $ JUMP(NAME lab, [lab])
 
-callFunction :: Tmp.Label -> Level -> Level -> [Gexp] -> Frontend Gexp
+callFunction :: Tmp.Label -> Level -> Level -> [Gexp] -> SemTr Gexp
 callFunction funclab callerlvl calleelvl argsge =
   do argsge' <- mapM unEx argsge
      if calleelvl == TOP
@@ -355,32 +357,30 @@ callFunction funclab callerlvl calleelvl argsge =
                 let staticlinkexp = frameAtLevel calleeparent callerlvl $ TEMP $ Tmp.Named $ Reg.EBP
                 return $ Ex $ CALL (NAME funclab, staticlinkexp:argsge')
 
-wrapFuncBody :: Stm -> Frontend Stm
+wrapFuncBody :: Stm -> SemTr Stm
 wrapFuncBody (EXP bodyexp) =
-  do temp <- Tmp.newTemp
+  do temp <- newTemp
      return $ seqcon [ MOVE (TEMP temp, bodyexp)
                      , MOVE (TEMP $ Tmp.Named $ Reg.EAX, TEMP temp) ]
 wrapFuncBody body = return body
 
-createProcFrag :: Tmp.Label -> Level -> Gexp -> Frontend ()
+createProcFrag :: Tmp.Label -> Level -> Gexp -> SemTr ()
 createProcFrag proclab level bodyge =
   do bodyge' <- unNx bodyge
      wrappedbody <- wrapFuncBody bodyge'
      let procfrag = Frame.PROC { Frame.procName  = proclab
                                , Frame.procBody  = wrappedbody
                                , Frame.procFrame = levelFrame level }
-     (v, t, l, frags) <- semantStGet
-     semantStPut (v, t, l, procfrag:frags)
+     frags <- getFragList
+     putFragList $ procfrag:frags
 
-createMainFrag :: Level -> Gexp -> Frontend ()
+createMainFrag :: Level -> Gexp -> SemTr ()
 createMainFrag lvl bodyge = 
-  do mainlab <- Tmp.namedLabel "tigermain"
+  do mainlab <- namedLabel "tigermain"
      createProcFrag mainlab lvl bodyge
 
-reset :: Frontend ()
-reset = do (v, t, l, _) <- semantStGet
-           semantStPut (v, t, l, []) 
+reset :: SemTr ()
+reset = putFragList []
 
-getResult :: Frontend [Frag]
-getResult = do (_, _, _, frags) <- semantStGet
-               return frags
+getResult :: SemTr [Frag]
+getResult = getFragList

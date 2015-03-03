@@ -1,27 +1,15 @@
 module TigerTemp
   (
     Label
-  , Temp (..)
-  , newTemp
-  , newLabel
-  , namedLabel
+  , Temp(..)
   )
   where
 
+import TigerRegisters
 import TigerSymbol
-import FrontEnd
-import Text.Parsec
 
+type Label = Symbol
 
-newTemp :: Frontend Temp
-newTemp = do (m, c, tc, lc, u) <- getState
-             putState (m, c, tc+1, lc, u)
-             return $ Temp tc
-
-newLabel :: Frontend Label
-newLabel = do (m, c, tc, lc, u) <- getState
-              putState (m, c, tc, lc+1, u)
-              symbol $ "L"++show lc
-
-namedLabel :: String -> Frontend Label
-namedLabel = TigerSymbol.symbol
+data Temp  = TEMP Int
+           | Named Register
+          deriving (Show, Eq)

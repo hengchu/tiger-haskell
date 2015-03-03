@@ -3,25 +3,27 @@ module TigerParser
     token2ptoken
   , parser
   , Position(..)
+  , TigerParser.runParser
   )
   where
 
-import qualified FrontEnd as Frt
 import TigerLexer
 import TigerAbsyn
 import Prelude hiding (EQ, LT, GT)
 import Text.Parsec hiding ((<|>))
 import Text.Parsec.Expr
-import TigerSymbol (symbol, Symbol)
+import TigerSymbol
+import qualified TigerGenSymLabTmp as TGSLT
 import Control.Applicative ((<|>), (<*), (*>))
 import Control.Monad
-import Control.Monad.IO.Class
+import Data.Functor.Identity
+import Control.Monad.Trans.Class
 
 class Position a where
   extractPosition :: a -> AlexPosn
 
-instance Position Frt.PToken where
-  extractPosition (Frt.PToken pos _) = pos
+instance Position PToken where
+  extractPosition (PToken pos _) = pos
 
 instance Position Var where
   extractPosition (SimpleVar(_, pos))       = pos
@@ -69,31 +71,40 @@ instance Position Dec where
   extractPosition (TypeDec (t:_)) = extractPosition t
   
 
-token2ptoken :: Token -> Frt.PToken
-token2ptoken (Token pos tc _ ) = Frt.PToken pos tc
+-- helper function for generating symbols
+symbol = lift . TGSLT.symbol
 
-updatePos :: SourcePos -> Frt.PToken -> [Frt.PToken] -> SourcePos
-updatePos pos (Frt.PToken (AlexPn _ line col) _) _ = 
+-- Simplified token type for the parser.
+data PToken = PToken AlexPosn TokenClass
+  deriving(Show, Eq)
+
+type Parser = ParsecT [PToken] () (TGSLT.GenSymLabTmp Identity)
+
+token2ptoken :: Token -> PToken
+token2ptoken (Token pos tc _ ) = PToken pos tc
+
+updatePos :: SourcePos -> PToken -> [PToken] -> SourcePos
+updatePos pos (PToken (AlexPn _ line col) _) _ = 
   setSourceLine (setSourceColumn pos col) line
 
-parseSimpleToken :: TokenClass -> Frt.Frontend Frt.PToken
+parseSimpleToken :: TokenClass -> Parser PToken
 parseSimpleToken tc = tokenPrim show updatePos acceptTok
-  where acceptTok t@(Frt.PToken _ c) | tc == c = Just t
+  where acceptTok t@(PToken _ c) | tc == c = Just t
                                  | otherwise = Nothing
 
-parseId :: Frt.Frontend (Frt.PToken, String)
+parseId :: Parser (PToken, String)
 parseId = tokenPrim show updatePos acceptTok
-  where acceptTok idtok@(Frt.PToken _ (Id name)) = Just (idtok, name)
+  where acceptTok idtok@(PToken _ (Id name)) = Just (idtok, name)
         acceptTok _                       = Nothing
 
-parseNumber :: Frt.Frontend (Frt.PToken, Int)
+parseNumber :: Parser (PToken, Int)
 parseNumber = tokenPrim show updatePos acceptTok
-  where acceptTok num@(Frt.PToken _ (Number val)) = Just (num, val)
+  where acceptTok num@(PToken _ (Number val)) = Just (num, val)
         acceptTok _                           = Nothing
 
-parseString :: Frt.Frontend (Frt.PToken, String)
+parseString :: Parser (PToken, String)
 parseString = tokenPrim show updatePos acceptTok
-  where acceptTok str@(Frt.PToken _ (Str s)) = Just (str, s)
+  where acceptTok str@(PToken _ (Str s)) = Just (str, s)
         acceptTok _                      = Nothing
 
 negateOp pos a = OpExp { opLeft = IntExp (0, pos)
@@ -386,3 +397,14 @@ decs = do ds <- pDecs
           return $ Pdecs ds
 
 parser = try expr2 <|> decs
+
+runParser :: Parser a -> String 
+                      -> [PToken] 
+                      -> Either ParseError (a, TGSLT.GenSymLabTmpState)
+runParser p filename tokens =
+  let tgsltmonad = runPT p () filename tokens
+      identitymonad = TGSLT.runGSLT TGSLT.initialGSLTState tgsltmonad
+      (result, gsltstate) = runIdentity identitymonad
+  in case result of
+       Left err -> Left err
+       Right a  -> Right (a, gsltstate)

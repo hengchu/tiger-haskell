@@ -1,39 +1,30 @@
 import qualified TigerSemant as TS
+import qualified TigerSemTr  as TSt
 import qualified TigerLexer  as TLex
 import qualified TigerParser as TP
-import Text.Parsec
-import qualified FrontEnd as Frt
-import Control.Monad.State
-import Control.Monad.Except
-import System.Environment
-import qualified TigerCanon as TCan
-import qualified TigerCodeGen as TCG
+import qualified TigerGenSymLabTmp as TGSLT
+import TigerITree
+import TigerFrame
+import TigerCanon
 import Data.List
+import System.Environment
 
-isdata (Frt.DATA _ _) = True
-isdata (Frt.PROC _ _ _) = False
+isdata :: Frag -> Bool
+isdata (DATA _ _) = True
+isdata (PROC _ _ _) = False
+
+isproc :: Frag -> Bool
 isproc = not . isdata
 
-trans = do frags <- TS.transprog
-           (_, _, t, _, _) <- getState
-           let datafrags = filter isdata frags
-           let procfrags = filter isproc frags
-           linearized <- mapM TCan.linearize $ map Frt.procBody procfrags
-           basicblocks <- mapM TCan.basicblocks linearized
-           traces <- mapM TCan.tracesched basicblocks
-           let joined = concat traces
-           let foldhelper s (tmpcnt, instrs) = let (t2, instrs') = (TCG.codegen tmpcnt s)
-                                               in  (t2, instrs++instrs')
-           let results = foldr foldhelper (t, []) joined
-           let datastrs = map Frt.prettyprintfrag datafrags
-           let datastr = (concat . intersperse "\n") datastrs
-           return $ datastr:(map show $ snd results)
-           {-
-           let codestrs = map Frt.prettyprintstm joined
-           let codestr = (concat . intersperse "\n") codestrs
-           return $ codestr ++ "\n" ++ datastr
-           -}
-           
+trans :: Frag -> TGSLT.GenSymLabTmpState -> (String, TGSLT.GenSymLabTmpState)
+trans f state = if isdata f
+                   then (prettyprintfrag f, state)
+                   else let (stms, state') = canonicalize (procBody f) state
+                            lab = procName f
+                        in  (TGSLT.name lab ++ ":\n" ++ ((concat . intersperse "\n") $ map prettyprintstm stms), state')
+
+transfoldhelper frag (str, state) = let (str', state') = trans frag state
+                                    in  (str++"\n"++str', state')
 
 main :: IO ()
 main = do args <- getArgs
@@ -42,11 +33,12 @@ main = do args <- getArgs
           let eithertoken = TLex.scanner fileContent
           case eithertoken of
             Left lexerr -> print lexerr
-            Right tok -> do let statemonad = runPT trans Frt.initialSymbolTempState file (map TP.token2ptoken tok)
-                            let exceptmonad = evalStateT statemonad Frt.initialSemantState
-                            let iomonad = runExceptT exceptmonad
-                            stuff <- iomonad
-                            case stuff of
-                              Left parserr -> print parserr
-                              Right (Left semanterr) -> print semanterr
-                              Right (Right output) -> mapM_ putStrLn output
+            Right toks -> do let ptoks = map TP.token2ptoken toks
+                             let parseres = TP.runParser TP.parser file ptoks
+                             case parseres of
+                               Left parserr -> print parserr
+                               Right (prog, gsltstate) -> do (semantres, gsltstate2) <- TSt.runSemTr (TS.transprog prog) gsltstate TSt.initialSemTrState
+                                                             case semantres of
+                                                               Left semanterr -> print semanterr
+                                                               Right frags    -> do let (output, state) = foldr transfoldhelper (file++"\n", gsltstate2) frags
+                                                                                    putStrLn output

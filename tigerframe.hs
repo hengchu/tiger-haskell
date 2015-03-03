@@ -6,11 +6,38 @@ module TigerFrame
        , newFrame
        , allocLocalInFrame
        , TigerFrame.exp
+       , prettyprintfrag
        )
        where
 
 import Data.IORef
-import FrontEnd
+import TigerITree
+import TigerTemp
+import TigerGenSymLabTmp
+
+type Offset = Int
+data Frame  = Frame { frameFormals     :: Int
+                     ,frameOfflist     :: [Offset]
+                     ,frameLocalCount  :: IORef Int -- Count of local variables in frame
+                    }
+                    deriving (Eq)
+
+instance Show Frame where
+  show _ = "<frame>"
+
+data Frag = PROC { procName  :: Label
+                 , procBody  :: Stm
+                 , procFrame :: Frame }
+          | DATA { dataLab :: Label
+                 , dataStr :: String }
+          deriving (Show, Eq)
+
+prettyprintfrag :: Frag -> String
+prettyprintfrag (PROC n body _) = let fname = name n
+                                      fbody = prettyprintstm body
+                                  in  fname ++ ":\n" ++ fbody
+prettyprintfrag (DATA n str) = let fname = name n
+                               in  fname ++ ":\n" ++ show str
 
 newFrame :: Int -> IO (Frame, [Offset])
 newFrame numFormals = 
