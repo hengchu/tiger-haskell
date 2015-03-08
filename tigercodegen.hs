@@ -19,8 +19,8 @@ named = Tmp.Named
 codegen :: Stm -> TGSLT.GenSymLabTmpState -> ([Instr], TGSLT.GenSymLabTmpState)
 codegen stm st = let monad = codegen' stm
                      gsltmonad = execStateT monad []
-                     result = (runIdentity . TGSLT.runGSLT st) gsltmonad
-                 in  result
+                     (instrs, st') = (runIdentity . TGSLT.runGSLT st) gsltmonad
+                 in  (reverse instrs, st')
 
 stringdata :: Tmp.Label -> String -> String
 stringdata = undefined

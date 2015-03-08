@@ -3,6 +3,9 @@ import qualified TigerSemTr  as TSt
 import qualified TigerLexer  as TLex
 import qualified TigerParser as TP
 import qualified TigerGenSymLabTmp as TGSLT
+import TigerGraph
+import TigerFlow
+import qualified TigerCodeGen as CG
 import TigerITree
 import TigerFrame
 import TigerCanon
@@ -16,15 +19,18 @@ isdata (PROC _ _ _) = False
 isproc :: Frag -> Bool
 isproc = not . isdata
 
-trans :: Frag -> TGSLT.GenSymLabTmpState -> (String, TGSLT.GenSymLabTmpState)
+trans :: Frag -> TGSLT.GenSymLabTmpState -> (String, [Stm], TGSLT.GenSymLabTmpState)
 trans f state = if isdata f
-                   then (prettyprintfrag f, state)
+                   then (prettyprintfrag f, [], state)
                    else let (stms, state') = canonicalize (procBody f) state
                             lab = procName f
-                        in  (TGSLT.name lab ++ ":\n" ++ ((concat . intersperse "\n") $ map prettyprintstm stms), state')
+                        in  (TGSLT.name lab ++ ":\n" ++ ((concat . intersperse "\n") $ map prettyprintstm stms), stms, state')
 
-transfoldhelper frag (str, state) = let (str', state') = trans frag state
-                                    in  (str++"\n"++str', state')
+transfoldhelper frag (str, stms1, state) = let (str', stms2, state') = trans frag state
+                                    in  (str++"\n"++str', stms1 ++ stms2, state')
+
+codegenfoldhelper stm (instrs, state) = let (instrs', state') = CG.codegen stm state
+                                        in  (instrs ++ instrs', state')
 
 main :: IO ()
 main = do args <- getArgs
@@ -40,5 +46,8 @@ main = do args <- getArgs
                                Right (prog, gsltstate) -> do (semantres, gsltstate2) <- TSt.runSemTr (TS.transprog prog) gsltstate TSt.initialSemTrState
                                                              case semantres of
                                                                Left semanterr -> print semanterr
-                                                               Right frags    -> do let (output, state) = foldr transfoldhelper (file++"\n", gsltstate2) frags
-                                                                                    putStrLn output
+                                                               Right frags    -> do let (output, stms, state) = foldl (flip transfoldhelper) (file++"\n", [], gsltstate2) frags
+                                                                                    let (instrs, state2) = foldl (flip codegenfoldhelper) ([], state) stms
+                                                                                    let (flowgraph, nodes) = instrs2graph instrs
+                                                                                    let dotfile = graph2dotfile "flowgraph" $ control flowgraph
+                                                                                    putStrLn dotfile
