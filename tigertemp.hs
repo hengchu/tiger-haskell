@@ -12,7 +12,7 @@ type Label = Symbol
 
 data Temp  = TEMP Int
            | Named Register
-          deriving (Eq)
+          deriving (Ord, Eq)
 
 instance Show Temp where
   show (TEMP d) = "T"++show d

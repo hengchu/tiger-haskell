@@ -9,6 +9,7 @@ import qualified TigerCodeGen as CG
 import TigerITree
 import TigerFrame
 import TigerCanon
+import TigerInterference
 import Data.List
 import System.Environment
 
@@ -49,5 +50,6 @@ main = do args <- getArgs
                                                                Right frags    -> do let (output, stms, state) = foldl (flip transfoldhelper) (file++"\n", [], gsltstate2) frags
                                                                                     let (instrs, state2) = foldl (flip codegenfoldhelper) ([], state) stms
                                                                                     let (flowgraph, nodes) = instrs2graph instrs
-                                                                                    let dotfile = graph2dotfile "flowgraph" $ control flowgraph
+                                                                                    let (intergraph, _) = interferenceGraph flowgraph
+                                                                                    let dotfile = graph2dotfile "flowgraph" $ graph intergraph
                                                                                     putStrLn dotfile

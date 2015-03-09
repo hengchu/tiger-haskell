@@ -5,6 +5,8 @@ module TigerAssem
   , Lab
   , Offset
   , mkaddr
+  , defs
+  , uses
   )
   where
 
@@ -94,6 +96,21 @@ data Instr = OPER  { opAssem::Assem, opSrc::[Temp], opDst::[Temp], opJump::Maybe
            | CMT Assem
           deriving (Eq)
 
+defs :: Instr -> [Temp]
+defs instr = case instr of
+               OPER _ _ ds _ -> ds
+               LABEL _ -> []
+               MOV _ _ d -> [d]
+               CMT _ -> []
+
+uses :: Instr -> [Temp]
+uses instr = case instr of
+                  OPER _ us _ _ -> us
+                  LABEL _ -> []
+                  MOV _ u _ -> [u]
+                  CMT _ -> []
+
+
 showaddr :: Addr -> String
 showaddr (t, off) = show off++"(%"++show t++")"
 
@@ -164,7 +181,7 @@ instance Show Assem where
   show (CALLR t) = "call %"++show t
   show (CALLL lab) = "call $"++lab
   show RET = "ret"
-  show (COMMENT str) = "; "++str
+  show (COMMENT str) = "# "++str
 
 instance Show Instr where
   show (OPER assem _ _ Nothing) = show assem

@@ -8,7 +8,7 @@ module TigerRegisters
 
 data Register = EAX | EBX | ECX | EDX | EBP | ESP | ESI | EDI | ZERO
                     | PSEUDO Int
-                deriving (Eq)
+                deriving (Eq, Ord)
 
 npseudoregs :: Int
 npseudoregs = 20
