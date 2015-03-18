@@ -2,6 +2,7 @@ module TigerRegisters
   (
     Register(..)
   , npseudoregs
+  , localbaseoffset
   , availregs
   )
   where
@@ -13,8 +14,11 @@ data Register = EAX | EBX | ECX | EDX | EBP | ESP | ESI | EDI | ZERO
 npseudoregs :: Int
 npseudoregs = 20
 
+localbaseoffset :: Int
+localbaseoffset = -4 - (-4) * npseudoregs
+
 availregs :: [Register]
-availregs = [EAX, EBX, ECX, EDX, EBP, ESP, ESI, EDI] ++ (map PSEUDO [1..npseudoregs])
+availregs = [EAX, EBX, ESI, EDI] ++ (map PSEUDO [1..npseudoregs])
 
 instance Show Register where
   show EAX = "eax"

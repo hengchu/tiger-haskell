@@ -75,7 +75,7 @@ newLevel parent formals =
 allocInFrame :: Level -> IO Access
 allocInFrame lvl@(LEVEL { levelFrame=lvlframe }) =
   do offset <- Frame.allocLocalInFrame lvlframe
-     return (lvl, offset) 
+     return (lvl, offset + Reg.localbaseoffset) 
 allocInFrame TOP = error "Compiler error: cannot alloc local in TOP Level frame"
 
 seqcon :: [Stm] -> Stm

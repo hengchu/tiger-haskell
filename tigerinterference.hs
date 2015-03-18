@@ -13,7 +13,8 @@ import Data.Maybe
 import Control.Monad.State
 import TigerTemp
 import Debug.Trace (trace)
-import Data.List (nub)
+import Data.List (nubBy)
+import Data.Tuple
 
 
 type InterGraph = Gr.Graph Temp ()
@@ -58,7 +59,8 @@ interferenceGraph f@(F.FGRAPH g dfs _ _) =
       edgetrans (t1, t2) = let n1 = fromJust $ Map.lookup t1 tn
                                n2 = fromJust $ Map.lookup t2 tn
                            in  ((n1, t1), (n2, t2))
-      alledges1 = nub $ map edgetrans alledges
+    
+      alledges1 = filter (\(a1, a2) -> a1 /= a2) $ nubBy (\m1 m2 -> m1 == m2 || swap m1 == m2) $ map edgetrans alledges
 
       intergraph1 = foldr (uncurry Gr.mkEdge1) intergraph alledges1
 

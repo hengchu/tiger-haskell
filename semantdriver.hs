@@ -11,6 +11,13 @@ import TigerFrame
 import TigerCanon
 import TigerInterference
 import Data.List
+import qualified Data.Map as Map
+import TigerRegisters
+import TigerTemp
+import TigerColor
+import qualified Data.ByteString as BString
+import TigerAssem
+import Control.Monad
 import System.Environment
 
 isdata :: Frag -> Bool
@@ -20,18 +27,44 @@ isdata (PROC _ _ _) = False
 isproc :: Frag -> Bool
 isproc = not . isdata
 
-trans :: Frag -> TGSLT.GenSymLabTmpState -> (String, [Stm], TGSLT.GenSymLabTmpState)
+trans :: Frag -> TGSLT.GenSymLabTmpState -> (Frame, [Stm], TGSLT.GenSymLabTmpState)
 trans f state = if isdata f
-                   then (prettyprintfrag f, [], state)
+                   then error "Compiler error: trans received a data frag."
                    else let (stms, state') = canonicalize (procBody f) state
                             lab = procName f
-                        in  (TGSLT.name lab ++ ":\n" ++ ((concat . intersperse "\n") $ map prettyprintstm stms), stms, state')
+                        in  (procFrame f, stms, state')
 
-transfoldhelper frag (str, stms1, state) = let (str', stms2, state') = trans frag state
-                                    in  (str++"\n"++str', stms1 ++ stms2, state')
+transfoldhelper frag (frames, stms1, state) = let (frame, stms2, state') = trans frag state
+                                    in  (frames++[frame], stms1 ++ stms2, state')
 
 codegenfoldhelper stm (instrs, state) = let (instrs', state') = CG.codegen stm state
                                         in  (instrs ++ instrs', state')
+
+initialcoloring = Map.fromList [(Named EAX, EAX)
+                               ,(Named EBX, EBX)
+                               ,(Named ECX, ECX)
+                               ,(Named EDX, EDX)
+                               ,(Named EBP, EBP)
+                               ,(Named ESP, ESP)
+                               ,(Named ESI, ESI)
+                               ,(Named EDI, EDI)]
+
+outputfrag :: Frag -> TGSLT.GenSymLabTmpState -> IO (TGSLT.GenSymLabTmpState)
+outputfrag (DATA lab str) st = do let instrs = CG.stringdata lab str
+                                  let output = map (flip instrfmt Map.empty) instrs
+                                  mapM_ putStrLn output
+                                  return st
+outputfrag (PROC lab stm frame) st = do let (stms, newst) = canonicalize stm st
+                                        let (instrs, newst2) = foldl (flip codegenfoldhelper) ([], newst) stms
+                                        let (flowgraph, nodes) = instrs2graph instrs
+                                        let (intergraph, node2templist) = interferenceGraph flowgraph
+                                        let regalloc = color intergraph initialcoloring availregs
+                                        let livetemps = map node2templist nodes
+                                        let body = zip instrs livetemps
+                                        instrs2 <- CG.procEntryExit lab body regalloc [] frame
+                                        let output = map (flip instrfmt regalloc) instrs2
+                                        mapM_ putStrLn output
+                                        return newst2
 
 main :: IO ()
 main = do args <- getArgs
@@ -47,9 +80,17 @@ main = do args <- getArgs
                                Right (prog, gsltstate) -> do (semantres, gsltstate2) <- TSt.runSemTr (TS.transprog prog) gsltstate TSt.initialSemTrState
                                                              case semantres of
                                                                Left semanterr -> print semanterr
-                                                               Right frags    -> do let (output, stms, state) = foldl (flip transfoldhelper) (file++"\n", [], gsltstate2) frags
+                                                               Right frags    -> do let datafrags = filter isdata frags
+                                                                                    let procfrags = filter isproc frags
+                                                                                    --mapM_ putStrLn (map prettyprintfrag procfrags)
+                                                                                    glst <- foldM (flip outputfrag) gsltstate2 datafrags
+                                                                                    _ <- foldM (flip outputfrag) glst procfrags
+                                                                                    return ()
+{-
+                                                                                    let (output, stms, state) = foldl (flip transfoldhelper) (file++"\n", [], gsltstate2) frags
                                                                                     let (instrs, state2) = foldl (flip codegenfoldhelper) ([], state) stms
                                                                                     let (flowgraph, nodes) = instrs2graph instrs
                                                                                     let (intergraph, _) = interferenceGraph flowgraph
-                                                                                    let dotfile = graph2dotfile "flowgraph" $ graph intergraph
-                                                                                    putStrLn dotfile
+                                                                                    let regalloc = color intergraph initialcoloring availregs
+                                                                                    mapM_ putStrLn $ map (flip instrfmt regalloc) instrs
+-}

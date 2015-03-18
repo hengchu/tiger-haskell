@@ -4,14 +4,19 @@ module TigerAssem
   , Instr(..)
   , Lab
   , Offset
+  , Addr
   , mkaddr
   , defs
   , uses
+  , instrfmt
   )
   where
 
 import TigerTemp
+import TigerRegisters
 import Data.List
+import qualified Data.Map as Map
+import Data.Maybe (fromJust)
 
 type Addr   = (Temp, Offset)
 type Lab    = String
@@ -94,6 +99,7 @@ data Instr = OPER  { opAssem::Assem, opSrc::[Temp], opDst::[Temp], opJump::Maybe
            | LABEL { labLab::Lab }
            | MOV   { movAssem::Assem, movSrc::Temp, movDst::Temp }
            | CMT Assem
+           | DIRECTIVE String
           deriving (Eq)
 
 defs :: Instr -> [Temp]
@@ -102,6 +108,7 @@ defs instr = case instr of
                LABEL _ -> []
                MOV _ _ d -> [d]
                CMT _ -> []
+               DIRECTIVE _ -> []
 
 uses :: Instr -> [Temp]
 uses instr = case instr of
@@ -109,7 +116,99 @@ uses instr = case instr of
                   LABEL _ -> []
                   MOV _ u _ -> [u]
                   CMT _ -> []
+                  DIRECTIVE _ -> []
 
+
+instrfmt :: Instr -> Map.Map Temp Register -> String
+instrfmt instr allocation =
+  let
+     showtemp (SRC d) srcs _ = show $ srcs !! d
+     showtemp (DST d) _ dsts = show $ dsts !! d
+     showtemp t@(TEMP _) _ _ = show $ fromJust $ Map.lookup t allocation
+     showtemp t _ _ = show t
+
+     showaddr1 :: Addr -> [Temp] -> [Temp] -> String
+     showaddr1 (t, off) srcs dsts = show off++"(%"++showtemp t srcs dsts++")"
+
+     showas as srcs dsts =
+       let showtmp = \t -> showtemp t srcs dsts
+           showadr = \adr -> showaddr1 adr srcs dsts
+       in case as of
+            MOVRR t1 t2 -> "movl %"++showtmp t1++", %"++showtmp t2
+            MOVRM t1 addr -> "movl %"++showtmp t1++", "++showadr addr
+            MOVMR addr t2 -> "movl "++showadr addr++", %"++showtmp t2
+            MOVCR d t -> "movl $"++show d++", %"++showtmp t
+            MOVCM d addr -> "movl $"++show d++", "++showadr addr
+            PUSH t -> "pushl %"++showtmp t
+            PUSHC d -> "pushl $"++show d
+            PUSHM addr -> "pushl "++showadr addr
+            POP t -> "popl %"++showtmp t
+            LEAL lab t -> "leal $"++lab++", %"++showtmp t
+            LEAM addr t -> "leal "++showadr addr++", %"++showtmp t
+            ADDRR t1 t2 -> "addl %"++showtmp t1++", %"++showtmp t2
+            ADDRM t addr -> "addl %"++showtmp t++", "++showadr addr
+            ADDMR addr t -> "addl "++showadr addr++", %"++showtmp t
+            ADDCR d t -> "addl $"++show d++", %"++showtmp t
+            ADDCM d addr -> "addl $"++show d++", "++showadr addr
+            SUBRR t1 t2 -> "subl %"++showtmp t1++", %"++showtmp t2
+            SUBRM t addr -> "subl %"++showtmp t++", "++showadr addr
+            SUBMR addr t -> "subl "++showadr addr++", %"++showtmp t
+            SUBCR d t -> "subl $"++show d++", %"++showtmp t
+            SUBCM d addr -> "subl $"++show d++", "++showadr addr
+            INCR t -> "incl %"++showtmp t
+            INCM addr -> "incl "++showadr addr
+            DECR t -> "decl %"++showtmp t
+            DECM addr -> "decl "++showadr addr
+            IMULRR t1 t2 -> "imul %"++showtmp t1++", %"++showtmp t2
+            IMULRM t addr -> "imul %"++showtmp t++", "++showadr addr
+            IMULRR2 t1 t2 d -> "imul %"++showtmp t1++", %"++showtmp t2++", $"++show d
+            IMULRM2 t addr d -> "imul %"++showtmp t++", "++showadr addr++", $"++show d
+            IDIVR t -> "idivl %"++showtmp t
+            IDIVM addr -> "idivl "++showadr addr
+            CDQ -> "cdq"
+            ANDRR t1 t2 -> "andl %"++showtmp t1++", %"++showtmp t2
+            ANDRM t addr -> "andl %"++showtmp t++", "++showadr addr
+            ANDMR addr t -> "andl "++showadr addr++", %"++showtmp t
+            ANDCR d t -> "andl $"++show d++", %"++showtmp t
+            ANDCM d addr -> "andl $"++show d++", "++showadr addr
+            ORRR t1 t2 -> "orl %"++showtmp t1++", %"++showtmp t2
+            ORRM t addr -> "orl %"++showtmp t++", "++showadr addr
+            ORMR addr t -> "orl "++showadr addr++", %"++showtmp t
+            ORCR d t -> "orl $"++show d++", %"++showtmp t
+            ORCM d addr -> "orl $"++show d++", "++showadr addr
+            XORRR t1 t2 -> "xorl %"++showtmp t1++", %"++showtmp t2
+            XORRM t addr -> "xorl %"++showtmp t++", "++showadr addr
+            XORMR addr t -> "xorl "++showadr addr++", %"++showtmp t
+            XORCR d t -> "xorl $"++show d++", %"++showtmp t
+            XORCM d addr -> "xorl $"++show d++", "++showadr addr
+            NOTR t -> "notl %"++showtmp t
+            NOTM addr -> "notl "++showadr addr
+            NEGR t -> "negl %"++showtmp t
+            NEGM addr -> "negl "++showadr addr
+            JMP lab -> "jmp "++lab
+            JE lab -> "je "++lab
+            JNE lab -> "jne "++lab
+            JZ lab -> "jz "++lab
+            JG lab -> "jg "++lab
+            JGE lab -> "jge "++lab
+            JL lab -> "jl "++lab
+            JLE lab -> "jle "++lab
+            CMPRR t1 t2 -> "cmpl %"++showtmp t1++", %"++showtmp t2
+            CMPRM t addr -> "cmpl %"++showtmp t++", "++showadr addr
+            CMPMR addr t -> "cmpl "++showadr addr++", %"++showtmp t
+            CMPCR d t -> "cmpl $"++show d++", %"++showtmp t
+            CALLR t -> "call %"++showtmp t
+            CALLL lab -> "call "++lab
+            RET -> "ret"
+            COMMENT str -> "# "++str
+
+  in case instr of
+       LABEL lab -> lab++":"
+       CMT (COMMENT cmt) -> "# "++cmt
+       CMT _ -> error "Compiler error: Illegal CMT pattern."
+       OPER as srcs dsts _ -> showas as srcs dsts
+       MOV  as src dst -> showas as [src] [dst]
+       DIRECTIVE str -> str
 
 showaddr :: Addr -> String
 showaddr (t, off) = show off++"(%"++show t++")"
@@ -117,9 +216,9 @@ showaddr (t, off) = show off++"(%"++show t++")"
 instance Show Assem where
   show (MOVRR t1 t2) = "movl %"++show t1++", %"++show t2
   show (MOVRM t1 addr) = "movl %"++show t1++", "++showaddr addr
-  show (MOVMR addr t2) = "movl "++show addr++", %"++show t2
+  show (MOVMR addr t2) = "movl "++showaddr addr++", %"++show t2
   show (MOVCR d t) = "movl $"++show d++", %"++show t
-  show (MOVCM d addr) = "movl $"++show d++", "++show addr
+  show (MOVCM d addr) = "movl $"++show d++", "++showaddr addr
   show (PUSH t) = "pushl %"++show t
   show (PUSHC d) = "pushl $"++show d
   show (PUSHM addr) = "pushl "++showaddr addr
@@ -166,14 +265,14 @@ instance Show Assem where
   show (NOTM addr) = "notl "++showaddr addr
   show (NEGR t) = "negl %"++show t
   show (NEGM addr) = "negl "++showaddr addr
-  show (JMP lab) = "jmp $"++lab
-  show (JE lab) = "je $"++lab
-  show (JNE lab) = "jne $"++lab
-  show (JZ lab) = "jz $"++lab
-  show (JG lab) = "jg $"++lab
-  show (JGE lab) = "jge $"++lab
-  show (JL lab) = "jl $"++lab
-  show (JLE lab) = "jle $"++lab
+  show (JMP lab) = "jmp "++lab
+  show (JE lab) = "je "++lab
+  show (JNE lab) = "jne "++lab
+  show (JZ lab) = "jz "++lab
+  show (JG lab) = "jg "++lab
+  show (JGE lab) = "jge "++lab
+  show (JL lab) = "jl "++lab
+  show (JLE lab) = "jle "++lab
   show (CMPRR t1 t2) = "cmpl %"++show t1++", %"++show t2
   show (CMPRM t addr) = "cmpl %"++show t++", "++showaddr addr
   show (CMPMR addr t) = "cmpl "++showaddr addr++", %"++show t
@@ -189,3 +288,4 @@ instance Show Instr where
   show (LABEL lab) = lab++":"
   show (MOV assem _ _) = show assem
   show (CMT assem) = show assem
+  show (DIRECTIVE str) = str

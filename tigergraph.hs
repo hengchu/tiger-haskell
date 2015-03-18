@@ -11,6 +11,7 @@ module TigerGraph
   , emptyGraph
   , newNode
   , newNode1
+  , rmNode
   , mkEdge
   , mkEdge1
   , rmEdge
@@ -70,6 +71,9 @@ newNode g lab = let n = head $ Gr.newNodes 1 g
 newNode1 :: Graph () b -> (Node (), Graph () b)
 newNode1 g = newNode g ()
 
+rmNode :: UNode -> Graph a b -> Graph a b
+rmNode n g = Gr.delNode n g
+
 mkEdge :: Node a -> Node a -> b -> Graph a b -> Graph a b
 mkEdge n1 n2 lab g = let edge = (fst n1, fst n2, lab)
                      in  Gr.insEdge edge g
@@ -83,15 +87,15 @@ rmEdge n1 n2 g = let edge = (fst n1, fst n2)
 
 type PrintGraph = State String
 
-printgraph :: (Show a, Show b) => String -> Graph a b -> PrintGraph ()
-printgraph name g = 
+printgraph :: (Show a, Show b) => String -> Graph a b -> Bool -> PrintGraph ()
+printgraph name g isdirected = 
   let
     emit :: String -> PrintGraph ()
     emit str = do s <- get
                   put $ s ++ str
 
     arrow :: PrintGraph ()
-    arrow = emit "->"
+    arrow = if isdirected then emit " -> " else emit " -- "
 
     newln :: PrintGraph ()
     newln = emit "\n"
@@ -120,11 +124,12 @@ printgraph name g =
                            endstmt
 
   in do let ns = nodes g
-        emit $ "digraph " ++ name ++ " {"
+        let title = if isdirected then "digraph" else "graph"
+        emit $ title ++ " " ++ name ++ " {"
         newln
         mapM_ printnodelab ns
         mapM_ printnode ns
         emit "}"
 
-graph2dotfile :: (Show a, Show b) => String -> Graph a b -> String
-graph2dotfile grname gr = execState (printgraph grname gr) ""
+graph2dotfile :: (Show a, Show b) => String -> Graph a b -> Bool -> String
+graph2dotfile grname gr directed = execState (printgraph grname gr directed) ""
