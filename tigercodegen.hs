@@ -34,7 +34,7 @@ stringdata lab str = [
                        DIRECTIVE ".data"
                      , TigerAssem.LABEL (TGSLT.name lab)
                      , DIRECTIVE $ ".4byte " ++ (show $ length str)
-                     , DIRECTIVE $ ".string \"" ++ str ++ "\""
+                     , DIRECTIVE $ ".string " ++ show str
                      ]
 
 -- Codegen Monad
@@ -64,7 +64,7 @@ codegen' s0 =
 
     genCall :: Tmp.Label -> [Exp] -> Bool -> Codegen ()
     genCall f args shouldsavecaller =
-      do let calldefs = map Tmp.Named [EAX, ECX, EDX]
+      do let calldefs = map named [EAX, ECX, EDX]
          when (shouldsavecaller) saveCallerSaves
          emit $ comment "Pushing arguments on stack in reverse order"
          mapM_ munchArg $ reverse args
@@ -81,7 +81,7 @@ codegen' s0 =
     saveCallerSaves :: Codegen ()
     saveCallerSaves =
       do emit $ comment "Pushing caller save registers on stack"
-         emit $ OPER (PUSH $ named EAX) (map named [EAX, ESP]) [named ESP] Nothing
+         --emit $ OPER (PUSH $ named EAX) (map named [EAX, ESP]) [named ESP] Nothing
          emit $ OPER (PUSH $ named ECX) (map named [ECX, ESP]) [named ESP] Nothing
          emit $ OPER (PUSH $ named EDX) (map named [EDX, ESP]) [named ESP] Nothing
          emit $ comment "Done pushing caller save registers on stack"
@@ -92,15 +92,15 @@ codegen' s0 =
       do emit $ comment "Restoring caller save registers"
          emit $ OPER (POP $ named EDX) [named ESP] (map named [EDX, ESP]) Nothing
          emit $ OPER (POP $ named ECX) [named ESP] (map named [ECX, ESP]) Nothing
-         emit $ OPER (POP $ named EAX) [named ESP] (map named [EAX, ESP]) Nothing
+         --emit $ OPER (POP $ named EAX) [named ESP] (map named [EAX, ESP]) Nothing
          emit $ comment "Done restoring caller save registers"
 
     munchStm :: Stm -> Codegen ()
-    munchStm (SEQ(s1, s2)) = error "Compiler error: ITree is not canonicalized."
+    munchStm (SEQ(_, _)) = error "Compiler error: ITree is not canonicalized."
     munchStm (MOVE(TEMP t, CALL(NAME f, args))) =
       do saveCallerSaves
          genCall f args False
-         emit $ MOV (MOVRR (named EAX) t) (named EAX) t
+         emit $ MOV (MOVRR (named EAX) (Tmp.DST 0)) (named EAX) t
          restoreCallerSaves
 
     munchStm (MOVE(TEMP t, e)) =
@@ -154,7 +154,7 @@ codegen' s0 =
       do src1 <- munchExp e1
          src2 <- munchExp e2
          let jmp = op2jmp relop
-         emit $ OPER (CMPRR (Tmp.SRC 0) (Tmp.SRC 1)) [src1, src2] [] Nothing
+         emit $ OPER (CMPRR (Tmp.SRC 1) (Tmp.SRC 0)) [src1, src2] [] Nothing
          emit $ OPER (jmp $ TGSLT.name lab1) [] [] (Just $ map TGSLT.name [lab1, lab2])
 
     munchStm (TigerITree.LABEL lab) =
@@ -166,8 +166,10 @@ codegen' s0 =
     munchStm (EXP(e)) =
       munchExp e >> return ()
 
+    munchStm _ = error "Compiler error: Impossible pattern in munchStm."
+
     munchExp :: Exp -> Codegen Tmp.Temp
-    munchExp (ESEQ(s, e)) = error "Compiler error: ITree is not canonicalized."
+    munchExp (ESEQ(_, _)) = error "Compiler error: ITree is not canonicalized."
 
     munchExp (TEMP t) = return t
 
@@ -226,7 +228,7 @@ codegen' s0 =
     munchExp (BINOP(PLUS, CONST i, e)) =
       do t <- munchExp e
          r <- newTemp
-         emit $ MOV (MOVRR t r) t r
+         emit $ MOV (MOVRR (Tmp.SRC 0) (Tmp.DST 0)) t r
          emit $ OPER (ADDCR i (Tmp.SRC 0)) [r] [r] Nothing
          return r
 
@@ -344,7 +346,7 @@ procEntryExit name
 
 
 pseudoreg2addr :: Register -> Addr
-pseudoreg2addr (PSEUDO d) = mkaddr (Tmp.Named EBP) $ (-4)*(d+1)
+pseudoreg2addr (PSEUDO d) = mkaddr (Tmp.Named EBP) $ (-4)*d
 pseudoreg2addr _ = error "Compiler error: pseudoreg2addr called with machine register."
 
 genSpill :: Map.Map Tmp.Temp Register -> Instr -> [Instr]
@@ -357,7 +359,9 @@ genSpill alloc instr =
     ispseudo _ = False
 
     loadfreg src@(PSEUDO _) mreg =
-      ([MOVMR (pseudoreg2addr src) (Tmp.Named mreg)], mreg)
+      ([ COMMENT ("loading src pseudoreg: "++show src++" into machine reg: "++show mreg)
+       , MOVMR (pseudoreg2addr src) (Tmp.Named mreg)
+       ], mreg)
     loadfreg src _ = ([], src)
 
     mkmov p@(PSEUDO _) r = MOVMR (pseudoreg2addr p) (Tmp.Named r)
@@ -366,16 +370,16 @@ genSpill alloc instr =
 
     mapsrcs [] _ = ([], [])
     mapsrcs (src:srcs) (mreg:mregs) =
-      let (loadinstrs, src') = loadfreg src mreg
-          (loadrest, srcs') = mapsrcs srcs mregs
+      let (loadinstrs, src') = loadfreg src  mreg
+          (loadrest, srcs')  = mapsrcs  srcs mregs
       in (loadinstrs++loadrest, src':srcs')
     mapsrcs srcs [] =
       if any ispseudo srcs
         then error "Compiler error: not enough machine register to map pseudo sources."
         else ([], srcs)
 
-    stripnamed (Tmp.Named r) = r
-    stripnamed t = case Map.lookup t alloc of
+    tmp2reg (Tmp.Named r) = r
+    tmp2reg t = case Map.lookup t alloc of
                      Just r -> r
                      Nothing -> error $ "Compiler error: genSpill encountered non-colored temp: "++show t++"."
 
@@ -387,11 +391,15 @@ genSpill alloc instr =
                    Just idx -> let src = srcs !! idx
                                    mreg = newsrcs !! idx
                                in  if src /= mreg
-                                      then ([mkmov mreg dst], mreg:dsts)
+                                      then ([ COMMENT ("storing machine reg: "++show mreg++" back into pseudoreg: " ++ show dst), 
+                                              mkmov mreg dst
+                                            ], mreg:dsts)
                                       else ([], dst:dsts)
                    Nothing -> case dst of
                                 PSEUDO _ -> let mreg = head availmregs
-                                            in  ([mkmov mreg dst], mreg:dsts)
+                                            in  ([ COMMENT ("storing machine reg: "++show mreg++" back into pseudoreg: " ++ show dst)
+                                                 , mkmov mreg dst
+                                                 ], mreg:dsts)
                                 _ -> ([], dst:dsts)
         else ([], dst:dsts)
 
@@ -399,13 +407,17 @@ genSpill alloc instr =
 
   in case instr of
        OPER i srcs dsts jmp ->
-         let (loadinstrs, newsrcs) = mapsrcs (map stripnamed srcs) availmregs
-             (storeinstrs, newdsts) = mapdsts (map stripnamed dsts) (map stripnamed srcs) newsrcs
-         in map mksimpleop loadinstrs ++ [OPER i (map Tmp.Named newsrcs) (map Tmp.Named newdsts) jmp] ++ map mksimpleop storeinstrs
+         let (loadinstrs, newsrcs) = mapsrcs (map tmp2reg srcs) availmregs
+             (storeinstrs, newdsts) = mapdsts (map tmp2reg dsts) (map tmp2reg srcs) newsrcs
+         in if any ispseudo $ newsrcs ++ newdsts
+               then error $ "Compiler error: " ++ show newsrcs ++ ", " ++ show newdsts
+               else map mksimpleop loadinstrs ++ [OPER i (map Tmp.Named newsrcs) (map Tmp.Named newdsts) jmp] ++ map mksimpleop storeinstrs
        MOV i src dst ->
-          let (loadinstrs, newsrcs) = mapsrcs [stripnamed src] availmregs
-              (storeinstrs, newdsts) = mapdsts [stripnamed dst] [stripnamed src] newsrcs
-          in map mksimpleop loadinstrs ++ [OPER i (map Tmp.Named newsrcs) (map Tmp.Named newdsts) Nothing] ++ map mksimpleop storeinstrs
+          let (loadinstrs, newsrcs) = mapsrcs [tmp2reg src] availmregs
+              (storeinstrs, newdsts) = mapdsts [tmp2reg dst] [tmp2reg src] newsrcs
+          in if any ispseudo $ newsrcs ++ newdsts
+               then error $ "Compiler error: " ++ show newsrcs ++ ", " ++ show newdsts
+               else map mksimpleop loadinstrs ++ [OPER i (map Tmp.Named newsrcs) (map Tmp.Named newdsts) Nothing] ++ map mksimpleop storeinstrs
        TigerAssem.LABEL _ -> [instr]
        CMT _ -> [instr]
        DIRECTIVE _ -> [instr]

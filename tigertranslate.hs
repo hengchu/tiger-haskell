@@ -46,6 +46,7 @@ import qualified TigerFrame as Frame
 import qualified TigerAbsyn as Absyn
 import qualified TigerRegisters as Reg
 import Control.Monad.State
+import Data.IORef
 import Prelude hiding (EQ, LT, GT)
 
 data Gexp = Ex Exp
@@ -65,10 +66,10 @@ newLevel parent formals =
      (frame, (slOffset:offsets)) <- liftIO $ Frame.newFrame (numformals+1)
      lvlUniq <- genUniq
      let lvl = LEVEL { levelFrame=frame
-                     , staticLinkOffset=slOffset
+                     , staticLinkOffset=slOffset + Reg.parambaseoffset
                      , levelParent=parent
                      , levelUniq=lvlUniq }
-     let offsets' = zip (replicate numformals lvl) offsets
+     let offsets' = map (\off -> (lvl, off+Reg.parambaseoffset)) offsets
      let formalsAndOffsets = zip formals offsets'
      return (lvl, formalsAndOffsets)
 
@@ -231,7 +232,7 @@ createRecord fieldvars =
   do address <- newTemp
      allocfunlab <- namedLabel "allocRecord"
      let alloc = MOVE(TEMP address, CALL (NAME allocfunlab, [CONST $ 4 * length fieldvars]))
-     let idxs  = [1..length fieldvars]
+     let idxs  = [0..length fieldvars-1]
      instrs <- mapM (uncurry $ initfield address) $ zip fieldvars idxs
      return $ Ex $ ESEQ(seqcon $ alloc:instrs, TEMP address)
   where initfield address fieldvar idx = do fieldvar' <- unEx fieldvar
@@ -251,14 +252,14 @@ field :: Gexp -> Int -> SemTr Gexp
 field recordge fieldnum =
   do fieldfunlab <- namedLabel "field"
      recordge'   <- unEx recordge
-     return $ Ex $ CALL (NAME fieldfunlab, [recordge', CONST fieldnum])
+     return $ Ex $ MEM(CALL(NAME fieldfunlab, [recordge', CONST $ 4*fieldnum]), 4)
 
 subscript :: Gexp -> Gexp -> SemTr Gexp
 subscript arrge idxge =
   do arrge' <- unEx arrge
      idxge' <- unEx idxge
      subscriptfunlab <- namedLabel "subscript"
-     return $ Ex $ CALL (NAME subscriptfunlab, [arrge', idxge'])
+     return $ Ex $ MEM(CALL(NAME subscriptfunlab, [arrge', idxge']), 4)
 
 simpleVar :: Access -> Level -> SemTr Gexp
 simpleVar (varlevel, offset) fromLevel =
@@ -289,7 +290,14 @@ ifThenElse testge (Nx thenstm) (Nx elsestm) =
   do testge' <- unCx testge
      t <- newLabel
      f <- newLabel
-     return $ Nx $ seqcon [testge' t f, LABEL t, thenstm, LABEL f, elsestm]
+     j <- newLabel
+     return $ Nx $ seqcon [ testge' t f
+                          , LABEL t
+                          , thenstm
+                          , JUMP (NAME j, [j])
+                          , LABEL f
+                          , elsestm
+                          , LABEL j]
 ifThenElse testge thenge elsege =
   do testge' <- unCx testge
      t <- newLabel
@@ -298,17 +306,16 @@ ifThenElse testge thenge elsege =
      r <- newTemp
      thenge' <- unEx thenge
      elsege' <- unEx elsege
-     return $ Ex $ ESEQ (
-                             seqcon [
-                               testge' t f
-                             , LABEL t
-                             , MOVE (TEMP r, thenge')
-                             , JUMP (NAME j, [j])
-                             , LABEL f
-                             , MOVE (TEMP r, elsege')
-                             , LABEL j
-                             ]
-                           , TEMP r)
+     return $ Ex $ ESEQ (  seqcon [
+                             testge' t f
+                           , LABEL t
+                           , MOVE (TEMP r, thenge')
+                           , JUMP (NAME j, [j])
+                           , LABEL f
+                           , MOVE (TEMP r, elsege')
+                           , LABEL j
+                           ]
+                         , TEMP r)
 
 whileLoop :: Gexp -> Gexp -> Tmp.Label -> SemTr Gexp
 whileLoop testge bodyge donelab =
@@ -348,12 +355,22 @@ break :: Tmp.Label -> SemTr Gexp
 break lab =
   return $ Nx $ JUMP(NAME lab, [lab])
 
+updateMaxArgs :: Level -> Int -> SemTr ()
+updateMaxArgs callerLvl numArgs =
+  case callerLvl of
+    TOP -> error "Compiler error: updateMaxArgs called with TOP level."
+    LEVEL lvlframe _ _ _ -> case lvlframe of
+                              Frame.Frame _ _ _ maxargref -> do maxargs <- liftIO $ readIORef maxargref
+                                                                when (numArgs > maxargs) $ liftIO $ writeIORef maxargref numArgs
+
 callFunction :: Tmp.Label -> Level -> Level -> [Gexp] -> SemTr Gexp
 callFunction funclab callerlvl calleelvl argsge =
   do argsge' <- mapM unEx argsge
      if calleelvl == TOP
-        then return $ Ex $ CALL (NAME funclab, argsge')
-        else do let calleeparent = levelParent calleelvl
+        then do updateMaxArgs callerlvl $ length argsge'
+                return $ Ex $ CALL (NAME funclab, argsge')
+        else do updateMaxArgs callerlvl $ 1+length argsge'
+                let calleeparent = levelParent calleelvl
                 let staticlinkexp = frameAtLevel calleeparent callerlvl $ TEMP $ Tmp.Named $ Reg.EBP
                 return $ Ex $ CALL (NAME funclab, staticlinkexp:argsge')
 

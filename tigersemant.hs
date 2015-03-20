@@ -465,7 +465,7 @@ transty (TAbs.RecordTy tfields) =
 
 transprog :: TAbs.Program -> SemTr [Frag]
 transprog absyn = let builtintypes = [("string", String), ("int", INT)]
-                      builtinfuncnames = ["chr", "concat", "exit", "flush", "getchar"
+                      builtinfuncnames = ["chr", "concat", "exit", "flush", "getch"
                                          ,"not", "ord", "print", "size", "substring"]
                       builtinfunctys = [String, String, Unit, Unit,
                                         String, INT, INT, Unit,

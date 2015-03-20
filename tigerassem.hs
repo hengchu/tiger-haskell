@@ -14,7 +14,6 @@ module TigerAssem
 
 import TigerTemp
 import TigerRegisters
-import Data.List
 import qualified Data.Map as Map
 import Data.Maybe (fromJust)
 
@@ -92,7 +91,7 @@ data Assem = MOVRR     Temp     Temp
            | CALLL     Lab
            | RET
            | COMMENT   String
-          deriving (Eq)
+          deriving (Show, Eq)
 
 
 data Instr = OPER  { opAssem::Assem, opSrc::[Temp], opDst::[Temp], opJump::Maybe [Lab] }
@@ -100,7 +99,7 @@ data Instr = OPER  { opAssem::Assem, opSrc::[Temp], opDst::[Temp], opJump::Maybe
            | MOV   { movAssem::Assem, movSrc::Temp, movDst::Temp }
            | CMT Assem
            | DIRECTIVE String
-          deriving (Eq)
+          deriving (Show, Eq)
 
 defs :: Instr -> [Temp]
 defs instr = case instr of
@@ -122,68 +121,81 @@ uses instr = case instr of
 instrfmt :: Instr -> Map.Map Temp Register -> String
 instrfmt instr allocation =
   let
-     showtemp (SRC d) srcs _ = show $ srcs !! d
-     showtemp (DST d) _ dsts = show $ dsts !! d
+     showtemp (SRC d) srcs dsts = showtemp (srcs !! d) srcs dsts
+     showtemp (DST d) srcs dsts = showtemp (dsts !! d) srcs dsts
      showtemp t@(TEMP _) _ _ = show $ fromJust $ Map.lookup t allocation
      showtemp t _ _ = show t
 
      showaddr1 :: Addr -> [Temp] -> [Temp] -> String
-     showaddr1 (t, off) srcs dsts = show off++"(%"++showtemp t srcs dsts++")"
+     showaddr1 (t, off) srcs dsts = show off++"("++showtemp t srcs dsts++")"
+
+     ispseudo (PSEUDO _) = True
+     ispseudo _ = False
+
+     map2pseudo (SRC d) srcs dsts = (ispseudo $ fromJust $ Map.lookup (srcs!!d) allocation)
+     map2pseudo (DST d) srcs dsts = (ispseudo $ fromJust $ Map.lookup (dsts!!d) allocation)
+     map2pseudo t _ _ = ispseudo $ fromJust $ Map.lookup t allocation
 
      showas as srcs dsts =
        let showtmp = \t -> showtemp t srcs dsts
            showadr = \adr -> showaddr1 adr srcs dsts
        in case as of
-            MOVRR t1 t2 -> "movl %"++showtmp t1++", %"++showtmp t2
-            MOVRM t1 addr -> "movl %"++showtmp t1++", "++showadr addr
-            MOVMR addr t2 -> "movl "++showadr addr++", %"++showtmp t2
-            MOVCR d t -> "movl $"++show d++", %"++showtmp t
+            MOVRR t1 t2 -> if map2pseudo t1 srcs dsts && map2pseudo t2 srcs dsts
+                              then error $ "Compiler error: " ++ show t1 ++ ", " ++ show t2 ++ ", " ++ show srcs ++ ", " ++ show dsts
+                              else "movl "++showtmp t1++", "++showtmp t2
+            MOVRM t1 addr -> if map2pseudo t1 srcs dsts
+                                then error $ "Compiler error: " ++ show t1 ++ show srcs ++ ", " ++ show dsts
+                                else "movl "++showtmp t1++", "++showadr addr
+            MOVMR addr t2 -> if map2pseudo t2 srcs dsts
+                                then error $ "Compiler error: " ++ show t2 ++ show srcs ++ ", " ++ show dsts
+                                else "movl "++showadr addr++", "++showtmp t2
+            MOVCR d t -> "movl $"++show d++", "++showtmp t
             MOVCM d addr -> "movl $"++show d++", "++showadr addr
-            PUSH t -> "pushl %"++showtmp t
+            PUSH t -> "pushl "++showtmp t
             PUSHC d -> "pushl $"++show d
             PUSHM addr -> "pushl "++showadr addr
-            POP t -> "popl %"++showtmp t
-            LEAL lab t -> "leal $"++lab++", %"++showtmp t
-            LEAM addr t -> "leal "++showadr addr++", %"++showtmp t
-            ADDRR t1 t2 -> "addl %"++showtmp t1++", %"++showtmp t2
-            ADDRM t addr -> "addl %"++showtmp t++", "++showadr addr
-            ADDMR addr t -> "addl "++showadr addr++", %"++showtmp t
-            ADDCR d t -> "addl $"++show d++", %"++showtmp t
+            POP t -> "popl "++showtmp t
+            LEAL lab t -> "leal "++lab++", "++showtmp t
+            LEAM addr t -> "leal "++showadr addr++", "++showtmp t
+            ADDRR t1 t2 -> "addl "++showtmp t1++", "++showtmp t2
+            ADDRM t addr -> "addl "++showtmp t++", "++showadr addr
+            ADDMR addr t -> "addl "++showadr addr++", "++showtmp t
+            ADDCR d t -> "addl $"++show d++", "++showtmp t
             ADDCM d addr -> "addl $"++show d++", "++showadr addr
-            SUBRR t1 t2 -> "subl %"++showtmp t1++", %"++showtmp t2
-            SUBRM t addr -> "subl %"++showtmp t++", "++showadr addr
-            SUBMR addr t -> "subl "++showadr addr++", %"++showtmp t
-            SUBCR d t -> "subl $"++show d++", %"++showtmp t
+            SUBRR t1 t2 -> "subl "++showtmp t1++", "++showtmp t2
+            SUBRM t addr -> "subl "++showtmp t++", "++showadr addr
+            SUBMR addr t -> "subl "++showadr addr++", "++showtmp t
+            SUBCR d t -> "subl $"++show d++", "++showtmp t
             SUBCM d addr -> "subl $"++show d++", "++showadr addr
-            INCR t -> "incl %"++showtmp t
+            INCR t -> "incl "++showtmp t
             INCM addr -> "incl "++showadr addr
-            DECR t -> "decl %"++showtmp t
+            DECR t -> "decl "++showtmp t
             DECM addr -> "decl "++showadr addr
-            IMULRR t1 t2 -> "imul %"++showtmp t1++", %"++showtmp t2
-            IMULRM t addr -> "imul %"++showtmp t++", "++showadr addr
-            IMULRR2 t1 t2 d -> "imul %"++showtmp t1++", %"++showtmp t2++", $"++show d
-            IMULRM2 t addr d -> "imul %"++showtmp t++", "++showadr addr++", $"++show d
-            IDIVR t -> "idivl %"++showtmp t
+            IMULRR t1 t2 -> "imul "++showtmp t1++", "++showtmp t2
+            IMULRM t addr -> "imul "++showtmp t++", "++showadr addr
+            IMULRR2 t1 t2 d -> "imul "++showtmp t1++", "++showtmp t2++", $"++show d
+            IMULRM2 t addr d -> "imul "++showtmp t++", "++showadr addr++", $"++show d
+            IDIVR t -> "idivl "++showtmp t
             IDIVM addr -> "idivl "++showadr addr
             CDQ -> "cdq"
-            ANDRR t1 t2 -> "andl %"++showtmp t1++", %"++showtmp t2
-            ANDRM t addr -> "andl %"++showtmp t++", "++showadr addr
-            ANDMR addr t -> "andl "++showadr addr++", %"++showtmp t
-            ANDCR d t -> "andl $"++show d++", %"++showtmp t
+            ANDRR t1 t2 -> "andl "++showtmp t1++", "++showtmp t2
+            ANDRM t addr -> "andl "++showtmp t++", "++showadr addr
+            ANDMR addr t -> "andl "++showadr addr++", "++showtmp t
+            ANDCR d t -> "andl $"++show d++", "++showtmp t
             ANDCM d addr -> "andl $"++show d++", "++showadr addr
-            ORRR t1 t2 -> "orl %"++showtmp t1++", %"++showtmp t2
-            ORRM t addr -> "orl %"++showtmp t++", "++showadr addr
-            ORMR addr t -> "orl "++showadr addr++", %"++showtmp t
-            ORCR d t -> "orl $"++show d++", %"++showtmp t
+            ORRR t1 t2 -> "orl "++showtmp t1++", "++showtmp t2
+            ORRM t addr -> "orl "++showtmp t++", "++showadr addr
+            ORMR addr t -> "orl "++showadr addr++", "++showtmp t
+            ORCR d t -> "orl $"++show d++", "++showtmp t
             ORCM d addr -> "orl $"++show d++", "++showadr addr
-            XORRR t1 t2 -> "xorl %"++showtmp t1++", %"++showtmp t2
-            XORRM t addr -> "xorl %"++showtmp t++", "++showadr addr
-            XORMR addr t -> "xorl "++showadr addr++", %"++showtmp t
-            XORCR d t -> "xorl $"++show d++", %"++showtmp t
+            XORRR t1 t2 -> "xorl "++showtmp t1++", "++showtmp t2
+            XORRM t addr -> "xorl "++showtmp t++", "++showadr addr
+            XORMR addr t -> "xorl "++showadr addr++", "++showtmp t
+            XORCR d t -> "xorl $"++show d++", "++showtmp t
             XORCM d addr -> "xorl $"++show d++", "++showadr addr
-            NOTR t -> "notl %"++showtmp t
+            NOTR t -> "notl "++showtmp t
             NOTM addr -> "notl "++showadr addr
-            NEGR t -> "negl %"++showtmp t
+            NEGR t -> "negl "++showtmp t
             NEGM addr -> "negl "++showadr addr
             JMP lab -> "jmp "++lab
             JE lab -> "je "++lab
@@ -193,11 +205,11 @@ instrfmt instr allocation =
             JGE lab -> "jge "++lab
             JL lab -> "jl "++lab
             JLE lab -> "jle "++lab
-            CMPRR t1 t2 -> "cmpl %"++showtmp t1++", %"++showtmp t2
-            CMPRM t addr -> "cmpl %"++showtmp t++", "++showadr addr
-            CMPMR addr t -> "cmpl "++showadr addr++", %"++showtmp t
-            CMPCR d t -> "cmpl $"++show d++", %"++showtmp t
-            CALLR t -> "call %"++showtmp t
+            CMPRR t1 t2 -> "cmpl "++showtmp t1++", "++showtmp t2
+            CMPRM t addr -> "cmpl "++showtmp t++", "++showadr addr
+            CMPMR addr t -> "cmpl "++showadr addr++", "++showtmp t
+            CMPCR d t -> "cmpl $"++show d++", "++showtmp t
+            CALLR t -> "call "++showtmp t
             CALLL lab -> "call "++lab
             RET -> "ret"
             COMMENT str -> "# "++str
@@ -210,6 +222,7 @@ instrfmt instr allocation =
        MOV  as src dst -> showas as [src] [dst]
        DIRECTIVE str -> str
 
+{-
 showaddr :: Addr -> String
 showaddr (t, off) = show off++"(%"++show t++")"
 
@@ -281,7 +294,9 @@ instance Show Assem where
   show (CALLL lab) = "call $"++lab
   show RET = "ret"
   show (COMMENT str) = "# "++str
+-}
 
+{-
 instance Show Instr where
   show (OPER assem _ _ Nothing) = show assem
   show (OPER assem _ _ (Just labs)) = show assem++", labs=["++(concat.intersperse ",") labs++"]"
@@ -289,3 +304,4 @@ instance Show Instr where
   show (MOV assem _ _) = show assem
   show (CMT assem) = show assem
   show (DIRECTIVE str) = str
+-}

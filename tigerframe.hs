@@ -5,7 +5,6 @@ module TigerFrame
        , Frag(..)
        , newFrame
        , allocLocalInFrame
-       , TigerFrame.exp
        , prettyprintfrag
        )
        where
@@ -19,6 +18,7 @@ type Offset = Int
 data Frame  = Frame { frameFormals     :: Int
                      ,frameOfflist     :: [Offset]
                      ,frameLocalCount  :: IORef Int -- Count of local variables in frame
+                     ,frameMaxArgs     :: IORef Int
                     }
                     deriving (Eq)
 
@@ -42,9 +42,11 @@ prettyprintfrag (DATA n str) = let fname = name n
 newFrame :: Int -> IO (Frame, [Offset])
 newFrame numFormals = 
   do localRef <- newIORef 0
+     maxargRef <- newIORef 0
      return (Frame { frameFormals=numFormals
                    , frameOfflist=offlist
-                   , frameLocalCount=localRef }, offlist)
+                   , frameLocalCount=localRef
+                   , frameMaxArgs=maxargRef }, offlist)
        where offlist = offsetListForNumFormals numFormals []
              offsetListForNumFormals 0 l  = reverse l
              offsetListForNumFormals n [] = offsetListForNumFormals (n-1) [4]
@@ -55,6 +57,3 @@ allocLocalInFrame Frame { frameLocalCount=locals } =
   do c <- readIORef locals
      writeIORef locals (c+1)
      return $ c * (-4)
-
-exp :: Int -> Exp -> Exp
-exp offset frameLocation = MEM(BINOP(PLUS, frameLocation, CONST offset), 4)
