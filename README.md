@@ -11,11 +11,8 @@ I am very new to Haskell and I probably make a lot of mistakes. If you spot
 anything bad, please let me know! I would greatly appreciate it!
 
 # Current progress
-IR translation is done. You can run `make semantdriver` to get an executable,
-it will type check a tiger source file and print out the intermediate language.
-
-I am working on the module that emits x86 assembly code now and hopefully I'll
-soon get a compiler that emits executable code.
+Compiler should workd for all testcases listed here:
+https://www.cs.princeton.edu/~appel/modern/testcases/
 
 I recently cleaned up the project of bad dependencies, and made a dependency
 graph of the important modules in the project. It's still not as pretty as I
