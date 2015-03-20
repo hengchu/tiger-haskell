@@ -58,6 +58,7 @@ outputfrag (PROC lab stm frame) st = do let (stms, newst) = canonicalize stm st
                                         let (instrs, newst2) = foldl (flip codegenfoldhelper) ([], newst) stms
                                         let (flowgraph, nodes) = instrs2graph instrs
                                         let (intergraph, node2templist) = interferenceGraph flowgraph
+                                        --let dotfile = graph2dotfile (TGSLT.name lab) (graph intergraph) False
                                         let regalloc = color intergraph initialcoloring availregs
                                         let livetemps = map node2templist nodes
                                         let body = zip instrs livetemps
@@ -86,11 +87,3 @@ main = do args <- getArgs
                                                                                     glst <- foldM (flip outputfrag) gsltstate2 datafrags
                                                                                     _ <- foldM (flip outputfrag) glst procfrags
                                                                                     return ()
-{-
-                                                                                    let (output, stms, state) = foldl (flip transfoldhelper) (file++"\n", [], gsltstate2) frags
-                                                                                    let (instrs, state2) = foldl (flip codegenfoldhelper) ([], state) stms
-                                                                                    let (flowgraph, nodes) = instrs2graph instrs
-                                                                                    let (intergraph, _) = interferenceGraph flowgraph
-                                                                                    let regalloc = color intergraph initialcoloring availregs
-                                                                                    mapM_ putStrLn $ map (flip instrfmt regalloc) instrs
--}

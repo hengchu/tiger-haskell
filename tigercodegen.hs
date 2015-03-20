@@ -81,7 +81,7 @@ codegen' s0 =
     saveCallerSaves :: Codegen ()
     saveCallerSaves =
       do emit $ comment "Pushing caller save registers on stack"
-         --emit $ OPER (PUSH $ named EAX) (map named [EAX, ESP]) [named ESP] Nothing
+         emit $ OPER (PUSH $ named EAX) (map named [EAX, ESP]) [named ESP] Nothing
          emit $ OPER (PUSH $ named ECX) (map named [ECX, ESP]) [named ESP] Nothing
          emit $ OPER (PUSH $ named EDX) (map named [EDX, ESP]) [named ESP] Nothing
          emit $ comment "Done pushing caller save registers on stack"
@@ -92,7 +92,7 @@ codegen' s0 =
       do emit $ comment "Restoring caller save registers"
          emit $ OPER (POP $ named EDX) [named ESP] (map named [EDX, ESP]) Nothing
          emit $ OPER (POP $ named ECX) [named ESP] (map named [ECX, ESP]) Nothing
-         --emit $ OPER (POP $ named EAX) [named ESP] (map named [EAX, ESP]) Nothing
+         emit $ OPER (POP $ named EAX) [named ESP] (map named [EAX, ESP]) Nothing
          emit $ comment "Done restoring caller save registers"
 
     munchStm :: Stm -> Codegen ()
@@ -100,6 +100,7 @@ codegen' s0 =
     munchStm (MOVE(TEMP t, CALL(NAME f, args))) =
       do saveCallerSaves
          genCall f args False
+         emit $ comment $ "saving RV into " ++ show t
          emit $ MOV (MOVRR (named EAX) (Tmp.DST 0)) (named EAX) t
          restoreCallerSaves
 

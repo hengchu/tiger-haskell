@@ -85,7 +85,8 @@ liveinout (F.FGRAPH g dfs us _) =
                       let successors = Gr.succ n g
                       succins <- mapM getInForNode (map Gr.unlabeledNode successors)
                       let outs = Set.unions succins
-                      setInForNode n' ins >> setOutForNode n' outs
+                      setInForNode n' ins
+                      setOutForNode n' outs
 
       loop = do m <- get
                 mapM_ liveness flowgraphnodes

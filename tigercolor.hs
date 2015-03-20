@@ -42,11 +42,16 @@ allcolored (IGRAPH gr _ _ _) coloring =
       temps = map snd ns
   in  all (\t -> Map.member t coloring) temps
 
+getcolor :: (Gr.Node Temp) -> Allocation -> Maybe Register
+getcolor n coloring = Map.lookup (snd n) coloring
+
 color :: IGraph -> Allocation -> [Register] -> Allocation
 color ig@(IGRAPH gr tn gt mvs) initial colors =
   case canreduce ig initial $ length colors of
     Nothing -> if allcolored ig initial then initial else error "Compiler error: Not enough colors for register allocation."
     Just n -> let un = fst n
+                  neighborcolors = reducelist $ map (flip getcolor initial) $ Gr.adj n gr
+                  availcolors = colors \\ neighborcolors
                   g' = Gr.rmNode un gr
-                  coloring = color (IGRAPH g' tn gt mvs) initial $ tail colors
-              in  Map.insert (snd n) (head colors) coloring
+                  coloring = color (IGRAPH g' tn gt mvs) initial $ tail availcolors
+              in  Map.insert (snd n) (head availcolors) coloring
