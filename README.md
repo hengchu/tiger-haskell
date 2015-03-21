@@ -11,7 +11,7 @@ I am very new to Haskell and I probably make a lot of mistakes. If you spot
 anything bad, please let me know! I would greatly appreciate it!
 
 # Current progress
-Compiler should workd for all testcases listed here:
+Compiler should work for all testcases listed here:
 https://www.cs.princeton.edu/~appel/modern/testcases/
 
 I recently cleaned up the project of bad dependencies, and made a dependency
