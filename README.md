@@ -11,11 +11,13 @@ I am very new to Haskell and I probably make a lot of mistakes. If you spot
 anything bad, please let me know! I would greatly appreciate it!
 
 # How to use it
+```
 git clone https://github.com/hengchu/tiger-haskell
 cd tiger-haskell
 cabal sandbox init
 cabal install --dependencies-only
 cabal build
+```
 
 # Current progress
 Compiler should work for all testcases listed here:
