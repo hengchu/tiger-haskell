@@ -84,12 +84,18 @@ codegen' s0 =
          emit $ OPER (PUSH $ named EAX) (map named [EAX, ESP]) [named ESP] Nothing
          emit $ OPER (PUSH $ named ECX) (map named [ECX, ESP]) [named ESP] Nothing
          emit $ OPER (PUSH $ named EDX) (map named [EDX, ESP]) [named ESP] Nothing
+         emit $ OPER (PUSH $ named EBX) (map named [EBX, ESP]) [named ESP] Nothing
+         emit $ OPER (PUSH $ named EDI) (map named [EDI, ESP]) [named ESP] Nothing
+         emit $ OPER (PUSH $ named ESI) (map named [ESI, ESP]) [named ESP] Nothing
          emit $ comment "Done pushing caller save registers on stack"
          
 
     restoreCallerSaves :: Codegen ()
     restoreCallerSaves =
       do emit $ comment "Restoring caller save registers"
+         emit $ OPER (POP $ named ESI) [named ESP] (map named [ESI, ESP]) Nothing
+         emit $ OPER (POP $ named EDI) [named ESP] (map named [EDI, ESP]) Nothing
+         emit $ OPER (POP $ named EBX) [named ESP] (map named [EBX, ESP]) Nothing
          emit $ OPER (POP $ named EDX) [named ESP] (map named [EDX, ESP]) Nothing
          emit $ OPER (POP $ named ECX) [named ESP] (map named [ECX, ESP]) Nothing
          emit $ OPER (POP $ named EAX) [named ESP] (map named [EAX, ESP]) Nothing
@@ -326,16 +332,9 @@ procEntryExit name
      emitPro $ MOV (MOVRR (Tmp.Named ESP) (Tmp.Named EBP)) (Tmp.Named ESP) (Tmp.Named EBP)
      emitPro $ comment "allocating space for locals"
      emitPro $ OPER (SUBCR (numlocals*4+npseudoregs*4) (Tmp.Named ESP)) [Tmp.Named ESP] [] Nothing
-     emitPro $ comment "saving callee saves"
-     emitPro $ OPER (PUSH (Tmp.Named EBX)) [Tmp.Named EBX] [] Nothing
-     emitPro $ OPER (PUSH (Tmp.Named EDI)) [Tmp.Named EDI] [] Nothing
-     emitPro $ OPER (PUSH (Tmp.Named ESI)) [Tmp.Named ESI] [] Nothing
      emitPro $ comment "prologue ends here"
 
      emitEpi $ comment "epilogue begins here"
-     emitEpi $ OPER (POP (Tmp.Named ESI)) [] [Tmp.Named ESI] Nothing
-     emitEpi $ OPER (POP (Tmp.Named EDI)) [] [Tmp.Named EDI] Nothing
-     emitEpi $ OPER (POP (Tmp.Named EBX)) [] [Tmp.Named EBX] Nothing
      emitEpi $ MOV (MOVRR (Tmp.Named EBP) (Tmp.Named ESP)) (Tmp.Named EBP) (Tmp.Named ESP)
      emitEpi $ OPER (POP (Tmp.Named EBP)) [] [Tmp.Named EBP] Nothing
      emitEpi $ OPER RET [] [] Nothing
