@@ -16,7 +16,7 @@ npseudoregs :: Int
 npseudoregs = 200
 
 localbaseoffset :: Int
-localbaseoffset = -4 - (-4) * npseudoregs
+localbaseoffset = -4 - 4 * npseudoregs
 
 parambaseoffset :: Int
 parambaseoffset = 4
