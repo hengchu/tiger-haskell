@@ -5,6 +5,8 @@ module TigerITree
        , Binop(..)
        , Relop(..)
        , Cvtop(..)
+       , isExpPtr
+       , IsPtr
        , prettyprintstm
        )
        where
@@ -14,6 +16,17 @@ import Control.Monad.State
 
 type Size = Int
 
+isExpPtr :: Exp -> IsPtr
+isExpPtr (BINOP _ isptr)   = isptr
+isExpPtr (CVTOP _)         = False
+isExpPtr (MEM _ isptr)     = isptr
+isExpPtr (TEMP _ isptr)    = isptr
+isExpPtr (ESEQ (stm, exp)) = isExpPtr exp
+isExpPtr (NAME _)          = False
+isExpPtr (CONST _ isptr)   = isptr
+isExpPtr (CONSTF _)        = False
+isExpPtr (CALL _ isptr)    = isptr
+
 data Stm = SEQ   (Stm, Stm)
          | LABEL (Temp.Label)
          | JUMP  (Exp, [Temp.Label])
@@ -22,15 +35,17 @@ data Stm = SEQ   (Stm, Stm)
          | EXP   Exp
          deriving (Show, Eq)
 
-data Exp = BINOP  (Binop, Exp, Exp)
+type IsPtr = Bool
+
+data Exp = BINOP  (Binop, Exp, Exp) IsPtr
          | CVTOP  (Cvtop, Exp, Size, Size)
-         | MEM    (Exp, Size)
-         | TEMP   Temp.Temp
+         | MEM    (Exp, Size) IsPtr
+         | TEMP   Temp.Temp IsPtr
          | ESEQ   (Stm, Exp)
          | NAME   Temp.Label
-         | CONST  Int
+         | CONST  Int IsPtr
          | CONSTF Float
-         | CALL   (Exp, [Exp])
+         | CALL   (Exp, [Exp]) IsPtr
          deriving (Show, Eq)
 
 data Test = TEST (Relop, Exp, Exp)
@@ -93,22 +108,22 @@ prettyprintstm' s =
                                                  
 
     exp :: Exp -> Int -> State String ()
-    exp (BINOP(p, a, b)) d = indent d >> say "BINOP(" >> (say $ show p) >> sayln ","
+    exp (BINOP(p, a, b) _) d = indent d >> say "BINOP(" >> (say $ show p) >> sayln ","
                                       >> (exp a $ d+1) >> sayln "," >> (exp b $ d+1)
                                       >> say ")"
     exp (CVTOP(p, e, s1, s2)) d = indent d >> say "CVTOP[" >> (say $ show s1)
                                            >> say "," >> (say $ show s2) >> say "]("
                                            >> (say $ show p) >> sayln ","
                                            >> (exp e $ d+1) >> say ")"
-    exp (MEM(e, s)) d = indent d >> say "MEM[" >> (say $ show s)
+    exp (MEM(e, s) _) d = indent d >> say "MEM[" >> (say $ show s)
                                  >> sayln "](" >> (exp e $ d+1) >> say ")"
-    exp (TEMP t) d = indent d >> say "TEMP " >> (say $ show t)
+    exp (TEMP t _) d = indent d >> say "TEMP " >> (say $ show t)
     exp (ESEQ(s, e)) d = indent d >> sayln "ESEQ(" >> (stm s $ d+1)
                                   >> sayln "," >> (exp e $ d+1) >> say ")"
     exp (NAME lab) d = indent d >> say "NAME " >> (say $ fst lab)
-    exp (CONST i) d = indent d >> say "CONST " >> (say $ show i)
+    exp (CONST i _) d = indent d >> say "CONST " >> (say $ show i)
     exp (CONSTF r) d = indent d >> say "CONSTF" >> (say $ show r)
-    exp (CALL(e, el)) d = indent d >> sayln "CALL(" >> (exp e $ d+1)
+    exp (CALL(e, el) _) d = indent d >> sayln "CALL(" >> (exp e $ d+1)
                                    >> mapM_ (\a -> sayln "," >> (exp a $ d+2)) el
                                    >> say ")"
 

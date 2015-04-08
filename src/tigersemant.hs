@@ -71,18 +71,30 @@ actualTy' pos a searched = do if a `elem` searched
                                  then throwError $ cyclicTypeError pos $ map show searched
                                  else return a
 
+isPointer :: Ty -> SemTr Bool
+isPointer String     = return False
+isPointer INT        = return False
+isPointer Unit       = return False
+isPointer t@(Name _) = do
+  aty <- actualTy (TLex.AlexPn 0 0 0) t
+  isPointer aty
+isPointer Nil        = return False
+isPointer (Array _)  = return True
+isPointer (Record _) = return True
+
 actualTy :: TLex.AlexPosn -> Ty -> SemTr Ty
 actualTy pos ty = actualTy' pos ty []
 
 withBinding :: Venv -> Tenv -> SemTr a -> SemTr a
-withBinding v t checker = do ov <- getVenv
-                             ot <- getTenv
-                             putVenv v
-                             putTenv t
-                             a <- checker
-                             putVenv ov
-                             putTenv ot
-                             return a
+withBinding v t checker = do 
+  ov <- getVenv
+  ot <- getTenv
+  putVenv v
+  putTenv t
+  a <- checker
+  putVenv ov
+  putTenv ot
+  return a
 
 findFirstDiffInLists :: Eq a => [a] -> [a] -> Maybe Int
 findFirstDiffInLists la lb | la == lb  = Nothing
@@ -92,21 +104,24 @@ findFirstDiffInLists la lb | la == lb  = Nothing
                                          in  (False) `elemIndex` equalities
 
 sym2ty :: TSym.Symbol -> TLex.AlexPosn -> SemTr Ty
-sym2ty sym pos = do t <- getTenv
-                    case Map.lookup sym t of
-                      Nothing -> throwError $ undefinedError pos $ name sym
-                      Just ty -> return ty
+sym2ty sym pos = do 
+  t <- getTenv
+  case Map.lookup sym t of
+    Nothing -> throwError $ undefinedError pos $ name sym
+    Just ty -> return ty
 
 addtypetobinding :: TSym.Symbol -> Ty -> SemTr ()
-addtypetobinding sym ty = do t <- getTenv
-                             let t' = Map.insert sym ty t
-                             putTenv t'
+addtypetobinding sym ty = do 
+  t <- getTenv
+  let t' = Map.insert sym ty t
+  putTenv t'
 
 addfunctiontobinding :: TSym.Symbol -> TTra.Level -> TTmp.Label -> [(Ty, Access)] -> Ty -> SemTr ()
-addfunctiontobinding sym lvl lab params result = do v <- getVenv
-                                                    let fentry = FunEntry lvl lab params result
-                                                    let v' = Map.insert sym fentry v
-                                                    putVenv v'
+addfunctiontobinding sym lvl lab params result = do
+  v <- getVenv
+  let fentry = FunEntry lvl lab params result
+  let v' = Map.insert sym fentry v
+  putVenv v'
 
 isarraytyp :: Ty -> Bool
 isarraytyp (Array _) = True
@@ -117,16 +132,20 @@ isrecordtyp (Record _) = True
 isrecordtyp _              = False
 
 zipWithM4 :: Monad m => (a -> b -> c -> d -> m e) -> [a] -> [b] -> [c] -> [d] -> m [e]
-zipWithM4 f (a:args1) (b:args2) (c:args3) (d:args4) = do e <- f a b c d
-                                                         es <- zipWithM4 f args1 args2 args3 args4
-                                                         return $ e:es
+zipWithM4 f (a:args1) (b:args2) (c:args3) (d:args4) = do
+  e <- f a b c d
+  es <- zipWithM4 f args1 args2 args3 args4
+  return $ e:es
+
 zipWithM4 f [] [] [] [] = return []
 zipWithM4 _ _ _ _ _ = error "zipWithM4: Args 1..4 must have the same length."
 
 zipWithM5 :: (Show a, Show b, Show c, Show d, Show e, Monad m) => (a -> b -> c -> d -> e -> m g) -> [a] -> [b] -> [c] -> [d] -> [e] -> m [g]
-zipWithM5 f (a:args1) (b:args2) (c:args3) (d:args4) (e:args5)= do g <- f a b c d e
-                                                                  gs <- zipWithM5 f args1 args2 args3 args4 args5
-                                                                  return $ g:gs
+zipWithM5 f (a:args1) (b:args2) (c:args3) (d:args4) (e:args5)= do
+  g <- f a b c d e
+  gs <- zipWithM5 f args1 args2 args3 args4 args5
+  return $ g:gs
+
 zipWithM5 f [] [] [] [] [] = return []
 zipWithM5 _ a b c d e = error $ "zipWithM5: Args 1..5 must have the same length." {- ++ show a ++ "\n" 
                                                                                     ++ show b ++ "\n"
@@ -170,13 +189,15 @@ transdec lvl lab dec =
                    bodyty' <- actualTy (TPar.extractPosition bodyexp) bodyty
                    decty' <- actualTy (TPar.extractPosition bodyexp) decty
                    if bodyty' == decty'
-                      then TTra.createProcFrag funlab newlvl gexp
+                      then do returnsptr <- isPointer bodyty'
+                              TTra.createProcFrag funlab newlvl gexp returnsptr
                       else throwError $ typeMisMatchError (TPar.extractPosition bodyexp) (show bodyty) (show decty)
       g (TAbs.VarDec {TAbs.varDecVar=vardec, TAbs.varDecTyp=typandpos, TAbs.varDecInit=initexp, TAbs.varDecPos=pos}) =
         do (initgexp, initty) <- transexp lvl lab initexp
            let varnamesym = TAbs.vardecName vardec
            varaccess <- liftIO $ TTra.allocInFrame lvl
-           var <- TTra.simpleVar varaccess lvl
+           isvarptr <- isPointer initty
+           var <- TTra.simpleVar varaccess lvl isvarptr
            assigngexp <- TTra.assign var initgexp
            case typandpos of
              Just (typsym, typpos) -> do typty <- sym2ty typsym typpos
@@ -239,7 +260,8 @@ transexp lvl lab absexp =
                   argtys <- mapM (uncurry actualTy) (zip argposes tys)
                   formaltys <- mapM (actualTy pos) (map fst funformals)
                   case findFirstDiffInLists argtys formaltys of
-                    Nothing -> do gexp <- TTra.callFunction funlab lvl funlvl ges
+                    Nothing -> do isresultptr <- isPointer funresult
+                                  gexp <- TTra.callFunction funlab lvl funlvl ges isresultptr
                                   return (gexp, funresult)
                     Just idx -> throwError $ typeMisMatchError (TPar.extractPosition $ funcargs !! idx) (show $ argtys !! idx) (show $ formaltys !! idx)
              Just _ -> throwError $ notCallableError pos $ name funcsym
@@ -284,7 +306,8 @@ transexp lvl lab absexp =
                                                          exptys' <- mapM (uncurry actualTy) (zip eposes exptys)
                                                          fieldtys' <- mapM (actualTy pos) fieldtys
                                                          case findFirstDiffInLists exptys' fieldtys' of
-                                                           Nothing  -> do finalgexp <- TTra.createRecord gexps
+                                                           Nothing  -> do isptrs <- mapM isPointer fieldtys'
+                                                                          finalgexp <- TTra.createRecord $ zip gexps isptrs
                                                                           return (finalgexp, Record ty)
                                                            Just idx -> throwError $ typeMisMatchError
                                                                                     (TPar.extractPosition $ eexps !! idx)
@@ -321,7 +344,8 @@ transexp lvl lab absexp =
                      Just elseexp' -> do (elsegexp, elsety) <- g elseexp'
                                          elsety' <- actualTy (TPar.extractPosition elseexp') elsety
                                          if (thenty' == elsety')
-                                            then do gexp <- TTra.ifThenElse testgexp thengexp elsegexp
+                                            then do isptr <- isPointer thenty'
+                                                    gexp <- TTra.ifThenElse testgexp thengexp elsegexp isptr
                                                     return (gexp, elsety)
                                             else throwError $ typeMisMatchError pos (show thenty) (show elsety)
                      Nothing       -> if (thenty' == Unit)
@@ -352,7 +376,7 @@ transexp lvl lab absexp =
                               t <- getTenv
                               iteraccess <- liftIO $ TTra.allocInFrame lvl
                               let v' = Map.insert itername (VarEntry iteraccess INT True) v
-                              itergexp<- TTra.simpleVar iteraccess lvl
+                              itergexp<- TTra.simpleVar iteraccess lvl False
                               donelab <- newLabel
                               enterLoop
                               (bodygexp, bodyty) <- withBinding v' t (transexp lvl (Just donelab) bodyexp)
@@ -411,7 +435,8 @@ transvar :: TTra.Level -> Maybe TTmp.Label -> TAbs.Var -> SemTr GexpTy
 transvar lvl lab (TAbs.SimpleVar(s, pos)) = do v <- getVenv
                                                case Map.lookup s v of
                                                  Nothing -> throwError $ undefinedError pos $ name s
-                                                 Just (VarEntry acc ty _) -> do gexp <- TTra.simpleVar acc lvl
+                                                 Just (VarEntry acc ty _) -> do isptr <- isPointer ty
+                                                                                gexp <- TTra.simpleVar acc lvl isptr
                                                                                 return (gexp, ty)
                                                  Just _ -> throwError $ notVariable pos $ name s
 transvar lvl lab (TAbs.FieldVar(v, s, pos)) = do (vgexp, vty) <- transvar lvl lab v
@@ -421,7 +446,8 @@ transvar lvl lab (TAbs.FieldVar(v, s, pos)) = do (vgexp, vty) <- transvar lvl la
                                                      case findIndex (\(sym, _) -> sym == s) symtypairs of
                                                        Nothing  -> throwError $ undefinedError pos $ name s
                                                        Just idx -> do let ty = snd $ symtypairs !! idx
-                                                                      gexp <- TTra.field vgexp idx
+                                                                      isptr <- isPointer ty
+                                                                      gexp <- TTra.field vgexp idx isptr
                                                                       return (gexp, ty)
                                                    _ -> throwError $ typeMisMatchError pos ("Record") (show vty')
 transvar lvl lab (TAbs.SubscriptVar(v, idxexp, pos)) = do (vgexp, vty) <- transvar lvl lab v
@@ -430,8 +456,10 @@ transvar lvl lab (TAbs.SubscriptVar(v, idxexp, pos)) = do (vgexp, vty) <- transv
                                                           if idxty' == INT 
                                                              then do vty' <- actualTy (TPar.extractPosition v) vty
                                                                      case vty' of
-                                                                       Array (innerty, _) -> do gexp <- TTra.subscript vgexp idxgexp
-                                                                                                return (gexp, innerty)
+                                                                       Array (innerty, _) -> do 
+                                                                         isptr <- isPointer innerty
+                                                                         gexp <- TTra.subscript vgexp idxgexp isptr
+                                                                         return (gexp, innerty)
                                                                        _ -> throwError $ typeMisMatchError pos ("Array") (show vty)
                                                              else throwError $ typeMisMatchError pos (show INT) (show idxty)
                                                  

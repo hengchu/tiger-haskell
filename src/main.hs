@@ -3,20 +3,23 @@ import qualified TigerSemTr  as TSt
 import qualified TigerLexer  as TLex
 import qualified TigerParser as TP
 import qualified TigerGenSymLabTmp as TGSLT
+import qualified TigerCodeGen as CG
+
 import TigerGraph
 import TigerFlow
-import qualified TigerCodeGen as CG
 import TigerITree
 import TigerFrame
 import TigerCanon
 import TigerInterference
-import Data.List
-import qualified Data.Map as Map
 import TigerRegisters
 import TigerTemp
 import TigerColor
-import qualified Data.ByteString as BString
 import TigerAssem
+
+import qualified Data.Map as Map
+import qualified Data.ByteString as BString
+
+import Data.List
 import Control.Monad
 import System.Environment
 
@@ -62,7 +65,8 @@ outputfrag (PROC lab stm frame) st = do let (stms, newst) = canonicalize stm st
                                         let regalloc = color intergraph initialcoloring availregs
                                         let livetemps = map node2templist nodes
                                         let body = zip instrs livetemps
-                                        instrs2 <- CG.procEntryExit lab body regalloc [] frame
+                                        let (_, _, _, _, tmap) = newst2
+                                        instrs2 <- CG.procEntryExit lab body regalloc [] frame tmap
                                         let output = map (flip instrfmt regalloc) instrs2
                                         mapM_ putStrLn output
                                         return newst2
@@ -85,5 +89,5 @@ main = do args <- getArgs
                                                                                     let procfrags = filter isproc frags
                                                                                     --mapM_ putStrLn (map prettyprintfrag procfrags)
                                                                                     glst <- foldM (flip outputfrag) gsltstate2 datafrags
-                                                                                    _ <- foldM (flip outputfrag) glst procfrags
+                                                                                    glst2 <- foldM (flip outputfrag) glst procfrags
                                                                                     return ()

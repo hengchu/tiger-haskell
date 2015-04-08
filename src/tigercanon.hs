@@ -18,20 +18,20 @@ import Control.Monad.Identity
 import Prelude hiding (EQ, LT, GT)
 
 commute :: Stm -> Exp -> Bool
-commute (EXP(CONST _)) _ = True
+commute (EXP(CONST _ _)) _ = True
 commute _ (NAME _) = True
-commute _ (CONST _) = True
+commute _ (CONST _ _) = True
 commute _ _ = False
 
 nop :: Stm
-nop = EXP(CONST 0)
+nop = EXP(CONST 0 False)
 
 type Canon = GenSymLabTmp Identity
 
 infixl % -- combines two Stm, ignores nop
 (%) :: Stm -> Stm -> Stm
-s % (EXP(CONST _)) = s
-(EXP(CONST _)) % s = s
+s % (EXP(CONST _ _)) = s
+(EXP(CONST _ _)) % s = s
 a % b              = SEQ(a, b)
 
 notrel :: Relop -> Relop
@@ -57,16 +57,17 @@ linearize stmtobelinearized =
   let
 
     reorder dofunc (exps, build) =
-      let f ((e@(CALL _)):rest) =
-            do t <- newTemp
-               f $ ESEQ(MOVE(TEMP t, e), TEMP t):rest
+      let f ((e@(CALL _ iscptr)):rest) =
+            do t <- newTemp iscptr
+               f $ ESEQ(MOVE(TEMP t iscptr, e), TEMP t iscptr):rest
           f (a:rest) =
             do (stm0, e) <- dofunc a
                (stm1, el) <- f rest
                if commute stm1 e
                   then return (stm0 % stm1, e:el)
-                  else do t <- newTemp
-                          return (stm0 % MOVE(TEMP t, e) % stm1, (TEMP t):el)
+                  else do let iseptr = isExpPtr e
+                          t <- newTemp iseptr
+                          return (stm0 % MOVE(TEMP t iseptr, e) % stm1, (TEMP t iseptr):el)
           f [] = return (nop, [])
       in do (stm0, el) <- f exps
             return (stm0, build el)
@@ -79,18 +80,18 @@ linearize stmtobelinearized =
                     return $ stm0 % s
 
     doexp :: Exp -> Canon (Stm, Exp)
-    doexp (BINOP(p, a, b)) =
-      expl [a, b] $ \[l, r] -> BINOP(p, l, r)
+    doexp (BINOP(p, a, b) isbptr) =
+      expl [a, b] $ \[l, r] -> BINOP(p, l, r) isbptr
     doexp (CVTOP(p, a, s1, s2)) =
       expl [a] $ \[arg] -> CVTOP(p, arg, s1, s2)
-    doexp (MEM(a, sz)) =
-      expl [a] $ \[arg] -> MEM(arg, sz)
+    doexp (MEM(a, sz) ismemptr) =
+      expl [a] $ \[arg] -> MEM(arg, sz) ismemptr
     doexp (ESEQ(s, e)) =
       do s' <- dostm s
          (s'', expr) <- expl [e] $ \[e'] -> e'
          return (s' % s'', expr)
-    doexp (CALL(e, el)) =
-      expl (e:el) $ \(func:args) -> CALL(func, args)
+    doexp (CALL(e, el) iscptr) =
+      expl (e:el) $ \(func:args) -> CALL(func, args) iscptr
     doexp e = expl [] $ \[] -> e
 
     dostm :: Stm -> Canon Stm
@@ -101,20 +102,20 @@ linearize stmtobelinearized =
       expl' [e] $ \[e'] -> JUMP(e', labs)
     dostm (CJUMP(TEST(p, a, b), t, f)) =
       expl' [a, b] $ \[a', b'] -> CJUMP(TEST(p, a', b'), t, f)
-    dostm (MOVE(TEMP t, CALL(e, el))) =
-      expl' (e:el) $ \(func:args) -> MOVE(TEMP t, CALL(func, args))
-    dostm (MOVE(TEMP t, b)) =
-      expl' [b] $ \[src] -> MOVE(TEMP t, src)
-    dostm (MOVE(MEM(e, sz), src)) =
-      expl' [e, src] $ \[e', src'] -> MOVE(MEM(e', sz), src')
+    dostm (MOVE(TEMP t istptr, CALL(e, el) iscptr)) =
+      expl' (e:el) $ \(func:args) -> MOVE(TEMP t istptr, CALL(func, args) iscptr)
+    dostm (MOVE(TEMP t istptr, b)) =
+      expl' [b] $ \[src] -> MOVE(TEMP t istptr, src)
+    dostm (MOVE(MEM(e, sz) ismemptr, src)) =
+      expl' [e, src] $ \[e', src'] -> MOVE(MEM(e', sz) ismemptr, src')
     dostm (MOVE(ESEQ(s, e), src)) =
       do s' <- dostm s
          src' <- dostm $ MOVE(e, src)
          return $ s' % src'
     dostm (MOVE(a, b)) =
       expl' [a, b] $ \[a', b'] -> MOVE(a', b')
-    dostm (EXP(CALL(e, el))) =
-      expl' (e:el) $ \(func:arg) -> EXP(CALL(func, arg))
+    dostm (EXP(CALL(e, el) iscptr)) =
+      expl' (e:el) $ \(func:arg) -> EXP(CALL(func, arg) iscptr)
     dostm (EXP e) =
       expl' [e] $ \[e'] -> EXP e'
     dostm s =

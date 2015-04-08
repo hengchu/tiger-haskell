@@ -40,8 +40,14 @@ stringdata lab str = [
 -- Codegen Monad
 type Codegen = StateT [Instr] (TGSLT.GenSymLabTmp Identity)
 
-newTemp :: Codegen Tmp.Temp
-newTemp = lift $ TGSLT.newTemp
+newTemp :: Bool -> Codegen Tmp.Temp
+newTemp = lift . TGSLT.newTemp
+
+newLabel :: Codegen Tmp.Label
+newLabel = lift $ TGSLT.newLabel
+
+namedLabel :: String -> Codegen Tmp.Label
+namedLabel = lift . TGSLT.namedLabel
 
 emit :: Instr -> Codegen ()
 emit instr = do instrs <- get
@@ -103,48 +109,48 @@ codegen' s0 =
 
     munchStm :: Stm -> Codegen ()
     munchStm (SEQ(_, _)) = error "Compiler error: ITree is not canonicalized."
-    munchStm (MOVE(TEMP t, CALL(NAME f, args))) =
+    munchStm (MOVE(TEMP t istptr, CALL(NAME f, args) iscptr)) =
       do saveCallerSaves
          genCall f args False
          emit $ comment $ "saving RV into " ++ show t
          emit $ MOV (MOVRR (named EAX) (Tmp.DST 0)) (named EAX) t
          restoreCallerSaves
 
-    munchStm (MOVE(TEMP t, e)) =
+    munchStm (MOVE(TEMP t istptr, e)) =
       do src <- munchExp e
          emit $ MOV (MOVRR (Tmp.SRC 0) (Tmp.DST 0)) src t
 
-    munchStm (MOVE(MEM(TEMP tmp, sz), e)) =
+    munchStm (MOVE(MEM(TEMP tmp istptr, sz) ismemptr, e)) =
       do src <- munchExp e
          emit $ OPER (MOVRM (Tmp.SRC 1) $ mkaddr (Tmp.SRC 0) 0) [tmp, src] [] Nothing
 
-    munchStm (MOVE(MEM(BINOP(PLUS, e1, CONST i), sz), e2)) =
+    munchStm (MOVE(MEM(BINOP(PLUS, e1, CONST i isiptr) isbptr, sz) ismemptr, e2)) =
       do src1 <- munchExp e1
          src2 <- munchExp e2
          emit $ OPER (MOVRM (Tmp.SRC 1) $ mkaddr (Tmp.SRC 0) i) [src1, src2] [] Nothing
 
-    munchStm (MOVE(MEM(BINOP(PLUS, CONST i, e1), sz), e2)) =
-      munchStm (MOVE(MEM(BINOP(PLUS, e1, CONST i), sz), e2))
+    munchStm (MOVE(MEM(BINOP(PLUS, CONST i isiptr, e1) isbptr, sz) ismemptr, e2)) =
+      munchStm (MOVE(MEM(BINOP(PLUS, e1, CONST i isiptr) isbptr, sz) ismemptr, e2))
 
-    munchStm (MOVE(MEM(BINOP(MINUS, e1, CONST i), sz), e2)) =
+    munchStm (MOVE(MEM(BINOP(MINUS, e1, CONST i isiptr) isbptr, sz) ismemptr, e2)) =
       do src1 <- munchExp e1
          src2 <- munchExp e2
          emit $ OPER (MOVRM (Tmp.SRC 1) $ mkaddr (Tmp.SRC 0) $ -i) [src1, src2] [] Nothing
 
-    munchStm (MOVE(MEM(BINOP(MINUS, CONST i, e1), sz), e2)) =
+    munchStm (MOVE(MEM(BINOP(MINUS, CONST i isiptr, e1) isbptr, sz) ismemptr, e2)) =
       do src1 <- munchExp e1
          src2 <- munchExp e2
          emit $ OPER (NEGR (Tmp.SRC 0)) [src1] [] Nothing
          emit $ OPER (MOVRM (Tmp.SRC 1) $ mkaddr (Tmp.SRC 0) i) [src1, src2] [] Nothing
 
-    munchStm (MOVE(MEM(e1, sz1), MEM(e2, sz2))) =
+    munchStm (MOVE(MEM(e1, sz1) ismem1ptr, MEM(e2, sz2) ismem2ptr)) =
       do src1 <- munchExp e1
          src2 <- munchExp e2
-         t <- newTemp
+         t <- newTemp ismem2ptr
          emit $ OPER (MOVMR (mkaddr (Tmp.SRC 0) 0) (Tmp.DST 0)) [src2] [t] Nothing
          emit $ OPER (MOVRM (Tmp.SRC 1) (mkaddr (Tmp.SRC 0) 0)) [src1, t] [] Nothing
 
-    munchStm (MOVE(MEM(e1, sz), e2)) =
+    munchStm (MOVE(MEM(e1, sz) ismemptr, e2)) =
       do src1 <- munchExp e1
          src2 <- munchExp e2
          emit $ OPER (MOVRM (Tmp.SRC 1) (mkaddr (Tmp.SRC 0) 0)) [src1, src2] [] Nothing
@@ -167,7 +173,7 @@ codegen' s0 =
     munchStm (TigerITree.LABEL lab) =
       emit $ TigerAssem.LABEL (TGSLT.name lab)
 
-    munchStm (EXP(CALL(NAME f, args))) =
+    munchStm (EXP(CALL(NAME f, args) iscptr)) =
       genCall f args True
 
     munchStm (EXP(e)) =
@@ -178,44 +184,44 @@ codegen' s0 =
     munchExp :: Exp -> Codegen Tmp.Temp
     munchExp (ESEQ(_, _)) = error "Compiler error: ITree is not canonicalized."
 
-    munchExp (TEMP t) = return t
+    munchExp (TEMP t istptr) = return t
 
-    munchExp (MEM(CONST i, sz)) =
-      do r <- newTemp
+    munchExp (MEM(CONST i isiptr, sz) ismemptr) =
+      do r <- newTemp True
          emit $ OPER (MOVMR (mkaddr (named ZERO) i) (Tmp.DST 0)) [] [r] Nothing
          return r
 
-    munchExp (MEM(BINOP(PLUS, e, CONST i), sz)) =
+    munchExp (MEM(BINOP(PLUS, e, CONST i isiptr) isbptr, sz) ismemptr) =
       do t <- munchExp e
-         r <- newTemp
+         r <- newTemp True
          emit $ OPER (MOVMR (mkaddr (Tmp.SRC 0) i) (Tmp.DST 0)) [t] [r] Nothing
          return r
 
-    munchExp (MEM(BINOP(PLUS, CONST i, e), sz)) =
-      munchExp (MEM(BINOP(PLUS, e, CONST i), sz))
+    munchExp (MEM(BINOP(PLUS, CONST i isiptr, e) isbptr, sz) ismemptr) =
+      munchExp (MEM(BINOP(PLUS, e, CONST i isiptr) isbptr, sz) ismemptr)
 
-    munchExp (MEM(BINOP(MINUS, e, CONST i), sz)) =
+    munchExp (MEM(BINOP(MINUS, e, CONST i isiptr) isbptr, sz) ismemptr) =
       do t <- munchExp e
-         r <- newTemp
+         r <- newTemp True
          emit $ OPER (MOVMR (mkaddr (Tmp.SRC 0) (-i)) (Tmp.DST 0)) [t] [r] Nothing
          return r
 
-    munchExp (MEM(e, sz)) =
+    munchExp (MEM(e, sz) ismemptr) =
       do t <- munchExp e
-         r <- newTemp
+         r <- newTemp ismemptr
          emit $ OPER (MOVMR (mkaddr (Tmp.SRC 0) 0) (Tmp.DST 0)) [t] [r] Nothing
          return r
 
-    munchExp (BINOP(MUL, e1, e2)) =
+    munchExp (BINOP(MUL, e1, e2) isbptr) =
       do t1 <- munchExp e1
          t2 <- munchExp e2
-         r <- newTemp
+         r <- newTemp isbptr
          emit $ OPER (MOVRR (Tmp.SRC 0) (Tmp.DST 0)) [t1] [r] Nothing
          emit $ OPER (IMULRR (Tmp.SRC 0) (Tmp.DST 0)) [t2, r] [r, named EDX] Nothing
          return r
 
-    munchExp (BINOP(DIV, e1, e2)) =
-      do r <- newTemp
+    munchExp (BINOP(DIV, e1, e2) isbptr) =
+      do r <- newTemp isbptr
 
          t1 <- munchExp e1
          emit $ OPER (MOVRR (Tmp.SRC 0) (named EAX)) [t1] [named EAX] Nothing
@@ -232,68 +238,68 @@ codegen' s0 =
          emit $ OPER (MOVRR (named EAX) (Tmp.DST 0)) [named EAX] [r] Nothing
          return r
 
-    munchExp (BINOP(PLUS, CONST i, e)) =
+    munchExp (BINOP(PLUS, CONST i isiptr, e) isbptr) =
       do t <- munchExp e
-         r <- newTemp
+         r <- newTemp isbptr
          emit $ MOV (MOVRR (Tmp.SRC 0) (Tmp.DST 0)) t r
          emit $ OPER (ADDCR i (Tmp.SRC 0)) [r] [r] Nothing
          return r
 
-    munchExp (BINOP(PLUS, e, CONST i)) =
-      munchExp (BINOP(PLUS, CONST i, e))
+    munchExp (BINOP(PLUS, e, CONST i isiptr) isbptr) =
+      munchExp (BINOP(PLUS, CONST i isiptr, e) isbptr)
 
-    munchExp (BINOP(PLUS, e1, e2)) =
+    munchExp (BINOP(PLUS, e1, e2) isbptr) =
       do t1 <- munchExp e1
          t2 <- munchExp e2
          emit $ OPER (ADDRR (Tmp.SRC 0) (Tmp.DST 0)) [t1, t2] [t2] Nothing
          return t2
 
-    munchExp (BINOP(MINUS, e1, e2)) =
+    munchExp (BINOP(MINUS, e1, e2) isbptr) =
       do t1 <- munchExp e1
          t2 <- munchExp e2
          emit $ OPER (SUBRR (Tmp.SRC 1) (Tmp.DST 0)) [t1, t2] [t1] Nothing
          return t1
 
-    munchExp (BINOP(AND, e1, e2)) =
+    munchExp (BINOP(AND, e1, e2) isbptr) =
       do t1 <- munchExp e1
          t2 <- munchExp e2
          emit $ OPER (ANDRR (Tmp.SRC 0) (Tmp.DST 0)) [t1, t2] [t2] Nothing
          return t2
 
-    munchExp (BINOP(OR, e1, e2)) =
+    munchExp (BINOP(OR, e1, e2) isbptr) =
       do t1 <- munchExp e1
          t2 <- munchExp e2
          emit $ OPER (ORRR (Tmp.SRC 0) (Tmp.DST 0)) [t1, t2] [t2] Nothing
          return t2
 
-    munchExp (CONST i) =
-      do r <- newTemp
+    munchExp (CONST i isiptr) =
+      do r <- newTemp isiptr
          emit $ OPER (MOVCR i (Tmp.DST 0)) [] [r] Nothing
          return r
 
     munchExp (NAME lab) =
-      do r <- newTemp
+      do r <- newTemp False
          emit $ OPER (LEAL (TGSLT.name lab) (Tmp.DST 0)) [] [r] Nothing
          return r
 
     munchExp e = error $ "Compiler error: Impossible pattern: " ++ show e ++ "."
 
     munchArg :: Exp -> Codegen ()
-    munchArg (CONST i) =
+    munchArg (CONST i isiptr) =
       emit $ OPER (PUSHC i) [named ESP] [named ESP] Nothing
 
-    munchArg (MEM(BINOP(PLUS, e, CONST i), sz)) =
+    munchArg (MEM(BINOP(PLUS, e, CONST i isiptr) isbptr, sz) ismemptr) =
       do t <- munchExp e
          emit $ OPER (PUSHM (mkaddr (Tmp.SRC 0) i)) [t, named ESP] [named ESP] Nothing
 
-    munchArg (MEM(BINOP(PLUS, CONST i, e), sz)) =
-      munchArg (MEM(BINOP(PLUS, e, CONST i), sz))
+    munchArg (MEM(BINOP(PLUS, CONST i isiptr, e) isbptr, sz) ismemptr) =
+      munchArg (MEM(BINOP(PLUS, e, CONST i isiptr) isbptr, sz) ismemptr)
 
-    munchArg (MEM(BINOP(MINUS, e, CONST i), sz)) =
+    munchArg (MEM(BINOP(MINUS, e, CONST i isiptr) isbptr, sz) ismemptr) =
       do t <- munchExp e
          emit $ OPER (PUSHM (mkaddr (Tmp.SRC 0) (-i))) [t, named ESP] [named ESP] Nothing
 
-    munchArg (MEM(e, sz)) =
+    munchArg (MEM(e, sz) ismemptr) =
       do t <- munchExp e
          emit $ OPER (PUSHM $ mkaddr (Tmp.SRC 0) 0) [t, named ESP] [named ESP] Nothing
 
@@ -305,16 +311,19 @@ codegen' s0 =
     munchStm s0
 
 
-procEntryExit :: Tmp.Label -> [(Instr, [Tmp.Temp])]
-                           -> Map.Map Tmp.Temp Register
-                           -> [Tmp.Temp]
-                           -> Frame
-                           -> IO [Instr]
+procEntryExit :: Tmp.Label 
+              -> [(Instr, [Tmp.Temp])]
+              -> Map.Map Tmp.Temp Register
+              -> [Tmp.Temp]
+              -> Frame
+              -> Map.Map Tmp.Temp Bool
+              -> IO [Instr]
 procEntryExit name
               instrAndLiveTemps
               alloc
               formals
-              frame =
+              frame
+              tempmap =
   do let instrs = map fst instrAndLiveTemps
      prologue <- newIORef []
      epilogue <- newIORef []

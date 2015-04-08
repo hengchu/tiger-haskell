@@ -75,7 +75,7 @@ data EnvEntry = VarEntry { varAccess :: Access
               | FunEntry { funLevel :: Level
                          , funLabel :: Label
                          , funFormals::[(Ty, Access)]
-                         , funResult::Ty}
+                         , funResult::Ty }
   deriving(Show)
 
 -- Environment mappings.
@@ -149,8 +149,8 @@ name = TGSLT.name
 newLabel :: SemTr Label
 newLabel = lift $ lift TGSLT.newLabel
 
-newTemp :: SemTr Temp
-newTemp = lift $ lift TGSLT.newTemp
+newTemp :: Bool -> SemTr Temp
+newTemp b = lift $ lift $ TGSLT.newTemp b
 
 genUniq :: SemTr Integer
 genUniq = do u <- getUniqState
