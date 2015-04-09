@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include "gcinit.h"
 
 int *allocArray(int size, int init)
 {
@@ -87,6 +88,7 @@ int main()
     consts[i].length=1;
     consts[i].chars[0]=i;
   }
+  gc_init();
   return tigermain(0 /* static link!? */);
 }
 

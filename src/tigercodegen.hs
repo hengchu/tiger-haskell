@@ -403,7 +403,9 @@ makePtrMap (retlab, rmap) stackmap =
                ++ ".4byte " ++ show regbits ++ "\n"
       stackdir = makeStackDirective stackmap
       pdir = makePseudoRegDirective rmap
-  in  [lab, DIRECTIVE $ dirstr++stackdir++"\n"++pdir++"\n.4byte 0"]
+      stackusagelab = retptrlab ++ "STACKUSAGE"
+      stackusagedir = ".4byte " ++ stackusagelab ++ "\n" ++ stackusagelab ++ ":\n"
+  in  [lab, DIRECTIVE $ dirstr++stackusagedir++stackdir++"\n"++pdir++"\n.4byte 0"]
 
 makePtrMaps :: SMap -> Map.Map Tmp.RetLabel RMap -> [Instr]
 makePtrMaps smap rmaps =
