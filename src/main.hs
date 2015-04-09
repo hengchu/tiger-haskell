@@ -92,4 +92,5 @@ main = do args <- getArgs
                                                                                     glst2 <- foldM (flip outputfrag) glst procfrags
                                                                                     let lastrlabnum = TGSLT.rlcount glst2-1
                                                                                     let lastrlab = "RET"++show lastrlabnum
+                                                                                    putStrLn ".global GCINITHEAD"
                                                                                     putStrLn $ "GCINITHEAD: .4byte " ++ lastrlab ++ "PTRMAP"
