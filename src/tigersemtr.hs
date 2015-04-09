@@ -15,6 +15,7 @@ module TigerSemTr
   , genUniq
   , initialSemTrState
   , newLabel
+  , newRetLabel
   , newTemp
   , namedLabel
   , Frag
@@ -148,6 +149,9 @@ name = TGSLT.name
 
 newLabel :: SemTr Label
 newLabel = lift $ lift TGSLT.newLabel
+
+newRetLabel :: SemTr RetLabel
+newRetLabel = lift $ lift TGSLT.newRetLabel
 
 newTemp :: Bool -> SemTr Temp
 newTemp b = lift $ lift $ TGSLT.newTemp b

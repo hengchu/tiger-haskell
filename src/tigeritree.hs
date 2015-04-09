@@ -25,7 +25,7 @@ isExpPtr (ESEQ (stm, exp)) = isExpPtr exp
 isExpPtr (NAME _)          = False
 isExpPtr (CONST _ isptr)   = isptr
 isExpPtr (CONSTF _)        = False
-isExpPtr (CALL _ isptr)    = isptr
+isExpPtr (CALL _ isptr _)  = isptr
 
 data Stm = SEQ   (Stm, Stm)
          | LABEL (Temp.Label)
@@ -45,7 +45,7 @@ data Exp = BINOP  (Binop, Exp, Exp) IsPtr
          | NAME   Temp.Label
          | CONST  Int IsPtr
          | CONSTF Float
-         | CALL   (Exp, [Exp]) IsPtr
+         | CALL   (Exp, [Exp]) IsPtr Temp.RetLabel
          deriving (Show, Eq)
 
 data Test = TEST (Relop, Exp, Exp)
@@ -123,7 +123,7 @@ prettyprintstm' s =
     exp (NAME lab) d = indent d >> say "NAME " >> (say $ fst lab)
     exp (CONST i _) d = indent d >> say "CONST " >> (say $ show i)
     exp (CONSTF r) d = indent d >> say "CONSTF" >> (say $ show r)
-    exp (CALL(e, el) _) d = indent d >> sayln "CALL(" >> (exp e $ d+1)
+    exp (CALL(e, el) _ _) d = indent d >> sayln "CALL(" >> (exp e $ d+1)
                                    >> mapM_ (\a -> sayln "," >> (exp a $ d+2)) el
                                    >> say ")"
 

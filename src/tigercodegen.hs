@@ -19,6 +19,9 @@ import qualified Data.Map as Map
 import qualified Data.List as List
 import Data.IORef
 
+import Data.Word
+import Data.Bits
+
 
 named :: Register -> Tmp.Temp
 named = Tmp.Named
@@ -68,15 +71,16 @@ codegen' s0 =
     op2jmp GE = JGE
     op2jmp op = error $ "Compiler error: Jump operator " ++ show op ++ " not yet implemented."
 
-    genCall :: Tmp.Label -> [Exp] -> Bool -> Codegen ()
-    genCall f args shouldsavecaller =
+    genCall :: Tmp.Label -> Tmp.RetLabel -> [Exp] -> Bool -> Codegen ()
+    genCall f retlab args shouldsavecaller =
       do let calldefs = map named [EAX, ECX, EDX]
          when (shouldsavecaller) saveCallerSaves
          emit $ comment "Pushing arguments on stack in reverse order"
          mapM_ munchArg $ reverse args
          emit $ comment "Done pushing arguments"
-         emit $ OPER (CALLL $ TGSLT.name f) [named ESP] (calldefs ++ map named [ESP, EBP])
+         emit $ OPER (CALLL (TGSLT.name f) retlab) [named ESP] (calldefs ++ map named [ESP, EBP])
                 Nothing
+         emit $ TigerAssem.LABEL $ TGSLT.name retlab
          when (length args > 0) $
            do emit $ comment "Free arguments from stack"
               emit $ OPER (ADDCR (length args * 4) (named ESP))
@@ -109,9 +113,9 @@ codegen' s0 =
 
     munchStm :: Stm -> Codegen ()
     munchStm (SEQ(_, _)) = error "Compiler error: ITree is not canonicalized."
-    munchStm (MOVE(TEMP t istptr, CALL(NAME f, args) iscptr)) =
+    munchStm (MOVE(TEMP t istptr, CALL(NAME f, args) iscptr retlab)) =
       do saveCallerSaves
-         genCall f args False
+         genCall f retlab args False
          emit $ comment $ "saving RV into " ++ show t
          emit $ MOV (MOVRR (named EAX) (Tmp.DST 0)) (named EAX) t
          restoreCallerSaves
@@ -173,8 +177,8 @@ codegen' s0 =
     munchStm (TigerITree.LABEL lab) =
       emit $ TigerAssem.LABEL (TGSLT.name lab)
 
-    munchStm (EXP(CALL(NAME f, args) iscptr)) =
-      genCall f args True
+    munchStm (EXP(CALL(NAME f, args) iscptr retlab)) =
+      genCall f retlab args True
 
     munchStm (EXP(e)) =
       munchExp e >> return ()
@@ -311,12 +315,108 @@ codegen' s0 =
     munchStm s0
 
 
+type ColorResult = Map.Map Tmp.Temp Register
+type TMap = Map.Map Tmp.Temp Bool
+type RMap = Map.Map Register Bool
+type SMap = Map.Map Int Bool
+
+tmap2rmap :: [Tmp.Temp] -> TMap -> ColorResult -> RMap
+tmap2rmap tmps tmap color =
+  let focusedtmap = Map.fromList $ filter (\(t, _) -> t `elem` tmps) $ Map.toList tmap
+      rmap = Map.mapKeys (\t -> case Map.lookup t color of
+                                  Just r -> r
+                                  Nothing -> error $ show t ++ " not found in color map!")
+             focusedtmap
+  in  rmap
+
+iscallassem :: Assem -> Bool
+iscallassem (CALLL _ _) = True
+iscallassem (CALLR _ _) = True
+iscallassem _ = False
+
+iscallinstr :: Instr -> Bool
+iscallinstr OPER{opAssem=assem} = iscallassem assem
+iscallinstr _ = False
+
+findAllCalls :: [(Instr, [Tmp.Temp])] -> [(Instr, [Tmp.Temp])]
+findAllCalls instrs = filter (\(i, _) -> iscallinstr i) instrs
+
+extractRetLabAssem :: Assem -> Tmp.RetLabel
+extractRetLabAssem (CALLL _ retlab) = retlab
+extractRetLabAssem (CALLR _ retlab) = retlab
+extractRetLabAssem _ = error "Compiler Error: extractRetLab called with non-CALL Assem!"
+
+extractRetLabInstr :: Instr -> Tmp.RetLabel
+extractRetLabInstr OPER{opAssem=assem} = extractRetLabAssem assem
+extractRetLabInstr _ = error "Compiler Error: extractRetLab called with non-CALL Instr!"
+
+makeRMaps :: [(Instr, [Tmp.Temp])] -> TMap -> ColorResult -> Map.Map Tmp.RetLabel RMap
+makeRMaps instrs tmap color =
+  let callinstrs = findAllCalls instrs
+      retlivetemps = map (\(i, t) -> (extractRetLabInstr i, t)) callinstrs
+      retrmaps = map (\(rl, ts) -> (rl, tmap2rmap ts tmap color)) retlivetemps
+  in  Map.fromList retrmaps
+
+makeRegDirective :: RMap -> Word32
+makeRegDirective rmap =
+  let 
+     usage = map inuse [EAX, EBX, ECX, EDX, ESI, EDI, EBP, ESP]
+  in regbit usage 0 0
+  where inuse r = case Map.lookup r rmap of
+                    Just True -> True
+                    _         -> False
+        regbit :: [Bool] -> Int -> Word32 -> Word32
+        regbit [] _ res        = res
+        regbit (True:ts) i res = regbit ts (i+1) ((bit i) .|. res)
+        regbit (_:ts) i res    = regbit ts (i+1) res
+
+ispseudo :: Register -> Bool
+ispseudo (PSEUDO _) = True
+ispseudo _ = False
+
+makePseudoRegDirective :: RMap -> String
+makePseudoRegDirective rmap =
+  let focusedrmap = Map.filterWithKey (\k _ -> ispseudo k) rmap
+      focusedpmap = Map.filter id focusedrmap
+      focusedlist = Map.toList focusedpmap
+      directives  = map (\(PSEUDO d, _) -> ".4byte " ++ show (-4*d)) focusedlist
+  in  (concat . List.intersperse "\n") directives
+
+makeStackDirective :: SMap -> String
+makeStackDirective smap =
+  let focusedsmap = Map.filter id smap
+      focusedslist = Map.toList focusedsmap
+      directives = map (\(v, _) -> ".4byte " ++ show v) focusedslist
+  in (concat . List.intersperse "\n") directives
+
+makePtrMap :: (Tmp.RetLabel, RMap) -> SMap -> [Instr]
+makePtrMap (retlab, rmap) stackmap =
+  let regbits = makeRegDirective rmap
+      prev = TGSLT.prevRetLabel retlab
+      retptrlab = TGSLT.name retlab ++ "PTRMAP"
+      prevptrlab = case prev of
+                     Nothing -> "0"
+                     Just p  -> p ++ "PTRMAP"
+      lab    = TigerAssem.LABEL retptrlab
+      dirstr =    ".4byte " ++ prevptrlab ++ "\n"
+               ++ ".4byte " ++ TGSLT.name retlab ++ "\n"
+               ++ ".4byte " ++ show regbits ++ "\n"
+      stackdir = makeStackDirective stackmap
+      pdir = makePseudoRegDirective rmap
+  in  [lab, DIRECTIVE $ dirstr++stackdir++"\n"++pdir++"\n.4byte 0"]
+
+makePtrMaps :: SMap -> Map.Map Tmp.RetLabel RMap -> [Instr]
+makePtrMaps smap rmaps =
+  let rmaplist = Map.toList rmaps
+      instrs = map (flip makePtrMap smap) rmaplist
+  in  concat instrs
+
 procEntryExit :: Tmp.Label 
               -> [(Instr, [Tmp.Temp])]
-              -> Map.Map Tmp.Temp Register
+              -> ColorResult
               -> [Tmp.Temp]
               -> Frame
-              -> Map.Map Tmp.Temp Bool
+              -> TMap
               -> IO [Instr]
 procEntryExit name
               instrAndLiveTemps
@@ -333,6 +433,10 @@ procEntryExit name
                         writeIORef epilogue (i:epi)
      let labname = TGSLT.name name
      numlocals <- readIORef $ frameLocalCount frame
+     stackmap <- readIORef $ frameLocalIsPtr frame
+
+     let stackmapfixed = Map.fromList $ map (\(off, b) -> (off+localbaseoffset, b)) stackmap
+     let rmaps = makeRMaps instrAndLiveTemps tempmap alloc
      
      emitPro $ DIRECTIVE $ ".text\n.global "++labname
      emitPro $ TigerAssem.LABEL labname
@@ -347,6 +451,7 @@ procEntryExit name
      emitEpi $ MOV (MOVRR (Tmp.Named EBP) (Tmp.Named ESP)) (Tmp.Named EBP) (Tmp.Named ESP)
      emitEpi $ OPER (POP (Tmp.Named EBP)) [] [Tmp.Named EBP] Nothing
      emitEpi $ OPER RET [] [] Nothing
+     mapM_ emitEpi (makePtrMaps stackmapfixed rmaps)
 
      let spilledInstrs = concatMap (genSpill alloc) instrs
      proInstrs <- readIORef prologue

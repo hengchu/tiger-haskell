@@ -1,6 +1,7 @@
 module TigerTemp
   (
     Label
+  , RetLabel
   , Temp(..)
   )
   where
@@ -9,6 +10,8 @@ import TigerRegisters
 import TigerSymbol
 
 type Label = Symbol
+
+type RetLabel = Label
 
 data Temp  = TEMP Int
            | SRC  Int

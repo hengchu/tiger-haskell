@@ -57,7 +57,7 @@ linearize stmtobelinearized =
   let
 
     reorder dofunc (exps, build) =
-      let f ((e@(CALL _ iscptr)):rest) =
+      let f ((e@(CALL _ iscptr _)):rest) =
             do t <- newTemp iscptr
                f $ ESEQ(MOVE(TEMP t iscptr, e), TEMP t iscptr):rest
           f (a:rest) =
@@ -90,8 +90,8 @@ linearize stmtobelinearized =
       do s' <- dostm s
          (s'', expr) <- expl [e] $ \[e'] -> e'
          return (s' % s'', expr)
-    doexp (CALL(e, el) iscptr) =
-      expl (e:el) $ \(func:args) -> CALL(func, args) iscptr
+    doexp (CALL(e, el) iscptr retlab) =
+      expl (e:el) $ \(func:args) -> CALL(func, args) iscptr retlab
     doexp e = expl [] $ \[] -> e
 
     dostm :: Stm -> Canon Stm
@@ -102,8 +102,8 @@ linearize stmtobelinearized =
       expl' [e] $ \[e'] -> JUMP(e', labs)
     dostm (CJUMP(TEST(p, a, b), t, f)) =
       expl' [a, b] $ \[a', b'] -> CJUMP(TEST(p, a', b'), t, f)
-    dostm (MOVE(TEMP t istptr, CALL(e, el) iscptr)) =
-      expl' (e:el) $ \(func:args) -> MOVE(TEMP t istptr, CALL(func, args) iscptr)
+    dostm (MOVE(TEMP t istptr, CALL(e, el) iscptr retlab)) =
+      expl' (e:el) $ \(func:args) -> MOVE(TEMP t istptr, CALL(func, args) iscptr retlab)
     dostm (MOVE(TEMP t istptr, b)) =
       expl' [b] $ \[src] -> MOVE(TEMP t istptr, src)
     dostm (MOVE(MEM(e, sz) ismemptr, src)) =
@@ -114,8 +114,8 @@ linearize stmtobelinearized =
          return $ s' % src'
     dostm (MOVE(a, b)) =
       expl' [a, b] $ \[a', b'] -> MOVE(a', b')
-    dostm (EXP(CALL(e, el) iscptr)) =
-      expl' (e:el) $ \(func:arg) -> EXP(CALL(func, arg) iscptr)
+    dostm (EXP(CALL(e, el) iscptr retlab)) =
+      expl' (e:el) $ \(func:arg) -> EXP(CALL(func, arg) iscptr retlab)
     dostm (EXP e) =
       expl' [e] $ \[e'] -> EXP e'
     dostm s =

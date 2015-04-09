@@ -65,8 +65,8 @@ outputfrag (PROC lab stm frame) st = do let (stms, newst) = canonicalize stm st
                                         let regalloc = color intergraph initialcoloring availregs
                                         let livetemps = map node2templist nodes
                                         let body = zip instrs livetemps
-                                        let (_, _, _, _, tmap) = newst2
-                                        instrs2 <- CG.procEntryExit lab body regalloc [] frame tmap
+                                        let tempmap = TGSLT.tmap newst2
+                                        instrs2 <- CG.procEntryExit lab body regalloc [] frame tempmap
                                         let output = map (flip instrfmt regalloc) instrs2
                                         mapM_ putStrLn output
                                         return newst2
@@ -90,4 +90,6 @@ main = do args <- getArgs
                                                                                     --mapM_ putStrLn (map prettyprintfrag procfrags)
                                                                                     glst <- foldM (flip outputfrag) gsltstate2 datafrags
                                                                                     glst2 <- foldM (flip outputfrag) glst procfrags
-                                                                                    return ()
+                                                                                    let lastrlabnum = TGSLT.rlcount glst2-1
+                                                                                    let lastrlab = "RET"++show lastrlabnum
+                                                                                    putStrLn $ "GCINITHEAD: .4byte " ++ lastrlab ++ "PTRMAP"

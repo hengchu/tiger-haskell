@@ -195,8 +195,8 @@ transdec lvl lab dec =
       g (TAbs.VarDec {TAbs.varDecVar=vardec, TAbs.varDecTyp=typandpos, TAbs.varDecInit=initexp, TAbs.varDecPos=pos}) =
         do (initgexp, initty) <- transexp lvl lab initexp
            let varnamesym = TAbs.vardecName vardec
-           varaccess <- liftIO $ TTra.allocInFrame lvl
            isvarptr <- isPointer initty
+           varaccess <- liftIO $ TTra.allocInFrame isvarptr lvl
            var <- TTra.simpleVar varaccess lvl isvarptr
            assigngexp <- TTra.assign var initgexp
            case typandpos of
@@ -374,7 +374,7 @@ transexp lvl lab absexp =
               then if (lowty == INT)
                       then do v <- getVenv
                               t <- getTenv
-                              iteraccess <- liftIO $ TTra.allocInFrame lvl
+                              iteraccess <- liftIO $ TTra.allocInFrame False lvl
                               let v' = Map.insert itername (VarEntry iteraccess INT True) v
                               itergexp<- TTra.simpleVar iteraccess lvl False
                               donelab <- newLabel

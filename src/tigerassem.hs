@@ -87,8 +87,8 @@ data Assem = MOVRR     Temp     Temp
            | CMPRM     Temp     Addr
            | CMPMR     Addr     Temp
            | CMPCR     Int      Temp
-           | CALLR     Temp
-           | CALLL     Lab
+           | CALLR     Temp     RetLabel
+           | CALLL     Lab      RetLabel
            | RET
            | COMMENT   String
           deriving (Show, Eq)
@@ -209,8 +209,8 @@ instrfmt instr allocation =
             CMPRM t addr -> "cmpl "++showtmp t++", "++showadr addr
             CMPMR addr t -> "cmpl "++showadr addr++", "++showtmp t
             CMPCR d t -> "cmpl $"++show d++", "++showtmp t
-            CALLR t -> "call "++showtmp t
-            CALLL lab -> "call "++lab
+            CALLR t _-> "call "++showtmp t
+            CALLL lab _ -> "call "++lab
             RET -> "ret"
             COMMENT str -> "# "++str
 

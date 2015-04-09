@@ -74,11 +74,11 @@ newLevel parent formals =
      let formalsAndOffsets = zip formals offsets'
      return (lvl, formalsAndOffsets)
 
-allocInFrame :: Level -> IO Access
-allocInFrame lvl@(LEVEL { levelFrame=lvlframe }) =
-  do offset <- Frame.allocLocalInFrame lvlframe
+allocInFrame :: Bool -> Level -> IO Access
+allocInFrame isptr lvl@(LEVEL { levelFrame=lvlframe }) =
+  do offset <- Frame.allocLocalInFrame isptr lvlframe
      return (lvl, offset + Reg.localbaseoffset) 
-allocInFrame TOP = error "Compiler error: cannot alloc local in TOP Level frame"
+allocInFrame _ TOP = error "Compiler error: cannot alloc local in TOP Level frame"
 
 seqcon :: [Stm] -> Stm
 seqcon (x:[]) = x
@@ -121,7 +121,8 @@ eqStr str1 str2 =
   do str1' <- unEx str1
      str2' <- unEx str2
      funclabel <- namedLabel "stringEqual"
-     return $ Ex $ CALL (NAME funclabel, [str1', str2']) False
+     retlab <- newRetLabel
+     return $ Ex $ CALL (NAME funclabel, [str1', str2']) False retlab
 
 notEqStr :: Gexp -> Gexp -> SemTr Gexp
 notEqStr str1 str2 = 
@@ -135,7 +136,8 @@ strLessThan str1 str2 =
   do str1' <- unEx str1
      str2' <- unEx str2
      funclabel <- namedLabel "stringLessThan"
-     return $ Ex $ CALL (NAME funclabel, [str1', str2']) False
+     retlab <- newRetLabel
+     return $ Ex $ CALL (NAME funclabel, [str1', str2']) False retlab
 
 strLessThanOrEq :: Gexp -> Gexp -> SemTr Gexp
 strLessThanOrEq str1 str2 = 
@@ -233,7 +235,8 @@ createRecord fieldvarsAndIsPtrs =
      let isaptr = True
      address <- newTemp isaptr
      allocfunlab <- namedLabel "allocRecord"
-     let alloc = MOVE(TEMP address isaptr, CALL (NAME allocfunlab, [CONST (4 * length fieldvars) False]) True)
+     retlab <- newRetLabel
+     let alloc = MOVE(TEMP address isaptr, CALL (NAME allocfunlab, [CONST (4 * length fieldvars) False]) True retlab)
      let idxs  = [0..length fieldvars-1]
      instrs <- mapM (uncurry $ initfield address isptrs) $ zip fieldvars idxs
      return $ Ex $ ESEQ(seqcon $ alloc:instrs, TEMP address isaptr)
@@ -249,21 +252,24 @@ createArray sizexp initexp =
   do sizexp'  <- unEx sizexp
      initexp' <- unEx initexp
      allocarrfun <- namedLabel "allocArray"
-     return $ Ex $ CALL (NAME allocarrfun, [sizexp', initexp']) True
+     retlab <- newRetLabel
+     return $ Ex $ CALL (NAME allocarrfun, [sizexp', initexp']) True retlab
 
 -- Variable access
 field :: Gexp -> Int -> Bool -> SemTr Gexp
 field recordge fieldnum isptr =
   do fieldfunlab <- namedLabel "field"
      recordge'   <- unEx recordge
-     return $ Ex $ MEM(CALL(NAME fieldfunlab, [recordge', CONST (4*fieldnum) False]) True, 4) isptr
+     retlab <- newRetLabel
+     return $ Ex $ MEM(CALL(NAME fieldfunlab, [recordge', CONST (4*fieldnum) False]) True retlab, 4) isptr 
 
 subscript :: Gexp -> Gexp -> Bool -> SemTr Gexp
 subscript arrge idxge isptr =
   do arrge' <- unEx arrge
      idxge' <- unEx idxge
      subscriptfunlab <- namedLabel "subscript"
-     return $ Ex $ MEM(CALL(NAME subscriptfunlab, [arrge', idxge']) True, 4) isptr
+     retlab <- newRetLabel
+     return $ Ex $ MEM(CALL(NAME subscriptfunlab, [arrge', idxge']) True retlab, 4) isptr
 
 simpleVar :: Access -> Level -> Bool -> SemTr Gexp
 simpleVar (varlevel, offset) fromLevel isptr =
@@ -364,19 +370,22 @@ updateMaxArgs callerLvl numArgs =
   case callerLvl of
     TOP -> error "Compiler error: updateMaxArgs called with TOP level."
     LEVEL lvlframe _ _ _ -> case lvlframe of
-                              Frame.Frame _ _ _ maxargref -> do maxargs <- liftIO $ readIORef maxargref
-                                                                when (numArgs > maxargs) $ liftIO $ writeIORef maxargref numArgs
+                              Frame.Frame {Frame.frameMaxArgs=maxargref} -> do 
+                                maxargs <- liftIO $ readIORef maxargref
+                                when (numArgs > maxargs) $ liftIO $ writeIORef maxargref numArgs
 
 callFunction :: Tmp.Label -> Level -> Level -> [Gexp] -> Bool -> SemTr Gexp
 callFunction funclab callerlvl calleelvl argsge isptr =
   do argsge' <- mapM unEx argsge
      if calleelvl == TOP
         then do updateMaxArgs callerlvl $ length argsge'
-                return $ Ex $ CALL (NAME funclab, argsge') isptr
+                retlab <- newRetLabel
+                return $ Ex $ CALL (NAME funclab, argsge') isptr retlab
         else do updateMaxArgs callerlvl $ 1+length argsge'
                 let calleeparent = levelParent calleelvl
                 let staticlinkexp = frameAtLevel calleeparent callerlvl $ TEMP (Tmp.Named Reg.EBP) False
-                return $ Ex $ CALL (NAME funclab, staticlinkexp:argsge') isptr
+                retlab <- newRetLabel
+                return $ Ex $ CALL (NAME funclab, staticlinkexp:argsge') isptr retlab
 
 wrapFuncBody :: Stm -> Bool -> SemTr Stm
 wrapFuncBody (EXP bodyexp) isptr =
