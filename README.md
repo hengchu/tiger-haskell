@@ -23,6 +23,8 @@ cabal build
 Compiler should work for all testcases listed here:
 https://www.cs.princeton.edu/~appel/modern/testcases/
 
+I'm working on making a Mark-Sweep garbage collector for this tiger compiler. I have already been able to generate pointer maps successfully. Next step is to implement heap management and the collector.
+
 I recently cleaned up the project of bad dependencies, and made a dependency
 graph of the important modules in the project. It's still not as pretty as I
 would like it to be, but you can check it out here:
