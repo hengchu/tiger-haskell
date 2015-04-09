@@ -14,8 +14,11 @@ void gc_init(void)
 {
   PtrMapEntry_t *head = *GCINITHEAD;
 
-  do {
+  uint32_t count = 1;
+
+  while (head) {
     printf("key = %x\n", head->key);
     head = head->prev;
-  } while (head->prev);
+    count++;
+  }
 }
