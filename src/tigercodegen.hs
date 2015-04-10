@@ -443,10 +443,16 @@ procEntryExit name
      emitPro $ DIRECTIVE $ ".text\n.global "++labname
      emitPro $ TigerAssem.LABEL labname
      emitPro $ comment "prolog begins"
-     emitPro $ OPER (PUSH $ Tmp.Named EBP) [Tmp.Named EBP] [] Nothing
+     emitPro $ OPER (PUSH $ Tmp.Named EBP) [Tmp.Named EBP] [Tmp.Named ESP] Nothing
      emitPro $ MOV (MOVRR (Tmp.Named ESP) (Tmp.Named EBP)) (Tmp.Named ESP) (Tmp.Named EBP)
+     emitPro $ OPER (PUSH $ Tmp.Named ESP) [Tmp.Named ESP] [Tmp.Named ESP] Nothing
+     emitPro $ OPER (CALLL "update_top_stack" ("", 0)) [] [] Nothing
+     emitPro $ OPER (ADDCR 4 (Tmp.Named ESP)) [] [] Nothing
      emitPro $ comment "allocating space for locals"
      emitPro $ OPER (SUBCR (numlocals*4+npseudoregs*4) (Tmp.Named ESP)) [Tmp.Named ESP] [] Nothing
+     emitPro $ OPER (PUSH $ Tmp.Named ESP) [Tmp.Named ESP] [Tmp.Named ESP] Nothing
+     emitPro $ OPER (CALLL "update_bot_stack" ("", 0)) [] [] Nothing
+     emitPro $ OPER (ADDCR 4 (Tmp.Named ESP)) [] [] Nothing
      emitPro $ comment "prologue ends here"
 
      emitEpi $ comment "epilogue begins here"
