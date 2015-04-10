@@ -11,7 +11,7 @@ typedef struct PtrMapEntry {
 extern PtrMapEntry_t **GCINITHEAD;
 
 static int32_t *TOPSTACK = 0;
-static int32_t *BOTSTACK = 0xffffffff;
+static int32_t *BOTSTACK = (int32_t *)0xffffffff;
 
 void walk_stack_usage(int32_t *stack_usage);
 
@@ -51,6 +51,6 @@ void walk_stack_usage(int32_t *stack_usage)
 
 void dump_stack_limits(void)
 {
-  printf("TOPSTACK = 0x%x\n", TOPSTACK);
-  printf("BOTSTACK = 0x%x\n", BOTSTACK);
+  printf("TOPSTACK = 0x%x\n", (int32_t)TOPSTACK);
+  printf("BOTSTACK = 0x%x\n", (int32_t)BOTSTACK);
 }

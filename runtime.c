@@ -92,7 +92,8 @@ int main()
     consts[i].chars[0]=i;
   }
   gc_init();
-  return tigermain(0 /* static link!? */);
+  int rv = tigermain(0 /* static link!? */);
+  return rv;
 }
 
 int ord(struct string *s)
