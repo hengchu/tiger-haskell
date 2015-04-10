@@ -32,7 +32,9 @@ data Assem = MOVRR     Temp     Temp
            | PUSH      Temp
            | PUSHC     Int
            | PUSHM     Addr
+           | PUSHA
            | POP       Temp
+           | POPA
            | LEAL      Lab      Temp
            | LEAM      Addr     Temp
            | ADDRR     Temp     Temp

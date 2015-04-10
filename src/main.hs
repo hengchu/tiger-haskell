@@ -26,6 +26,8 @@ import System.Environment
 isdata :: Frag -> Bool
 isdata (DATA _ _) = True
 isdata (PROC _ _ _) = False
+isdata (GCDESCARR _ _) = True
+isdata (GCDESCREC _ _) = True
 
 isproc :: Frag -> Bool
 isproc = not . isdata
@@ -53,6 +55,14 @@ initialcoloring = Map.fromList [(Named EAX, EAX)
                                ,(Named EDI, EDI)]
 
 outputfrag :: Frag -> TGSLT.GenSymLabTmpState -> IO (TGSLT.GenSymLabTmpState)
+outputfrag (GCDESCARR lab bool) st = do let instrs = CG.arraydescriptordata lab bool
+                                        let output = map (flip instrfmt Map.empty) instrs
+                                        mapM_ putStrLn output
+                                        return st
+outputfrag (GCDESCREC lab str) st = do let instrs = CG.recorddescriptordata lab str
+                                       let output = map (flip instrfmt Map.empty) instrs
+                                       mapM_ putStrLn output
+                                       return st
 outputfrag (DATA lab str) st = do let instrs = CG.stringdata lab str
                                   let output = map (flip instrfmt Map.empty) instrs
                                   mapM_ putStrLn output

@@ -2,21 +2,24 @@
 #include <stdlib.h>
 #include "gcinit.h"
 
-int *allocArray(int size, int init)
+int *allocArray(int size, int init, int descriptor)
 {
   int i;
-  int *a = (int *)malloc((1+size)*sizeof(int));
-  a[0] = size;
-  for(i=0;i<size;i++) a[i+1]=init;
+  int *a = (int *)malloc((2+size)*sizeof(int));
+  printf("size = %d, init = %d, descriptor = 0x%x\n", size, init, descriptor);
+  a[0] = descriptor;
+  a[1] = size;
+  for(i=0;i<size;i++) a[i+2]=init;
   return a;
 }
 
-int *allocRecord(int size)
+int *allocRecord(int size, int descriptor)
 {
   int i;
   int *p, *a;
-  p = a = (int *)malloc(size);
-  for(i=0;i<size;i+=sizeof(int)) *p++ = 0;
+  p = a = (int *)malloc(size+sizeof(int));
+  for(i=sizeof(int);i<size;i+=sizeof(int)) *p++ = 0;
+  a[0] = descriptor;
   return a;
 }
 
@@ -164,18 +167,18 @@ int field(int recAddr, int offset)
   {
     reportNil();
   } else {
-    return (recAddr + offset);
+    return (recAddr + offset + sizeof(int));
   }
 }
 
 int subscript(int arr, int idx) 
 {
-  int size = *(int *)arr;
+  int size = ((int *)arr)[1];
   if ((idx < 0) || (idx > size))
   {
     reportOob();
   } else {
-    return (arr + 4*(idx + 1));
+    return (arr + 4*(idx + 2));
   }
 }
 

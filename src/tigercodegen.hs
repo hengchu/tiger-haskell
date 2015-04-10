@@ -2,6 +2,8 @@ module TigerCodeGen
   (
     codegen
   , stringdata
+  , recorddescriptordata
+  , arraydescriptordata
   , procEntryExit
   )
   where
@@ -22,6 +24,8 @@ import Data.IORef
 import Data.Word
 import Data.Bits
 
+import Numeric
+
 
 named :: Register -> Tmp.Temp
 named = Tmp.Named
@@ -39,6 +43,30 @@ stringdata lab str = [
                      , DIRECTIVE $ ".4byte " ++ (show $ length str)
                      , DIRECTIVE $ ".string " ++ show str
                      ]
+
+recordmagicnumber :: Word32
+recordmagicnumber = 0xDEAFCACA
+
+recorddescriptordata :: Tmp.Label -> String -> [Instr]
+recorddescriptordata lab str = [
+                                 DIRECTIVE ".data"
+                               , TigerAssem.LABEL (TGSLT.name lab)
+                               , DIRECTIVE $ ".4byte 0x" ++ (showHex recordmagicnumber "")
+                               , DIRECTIVE $ ".4byte " ++ (show $ length str)
+                               , DIRECTIVE $ ".string " ++ show str
+                               ]
+
+arraymagicnumber :: Word32
+arraymagicnumber = 0xDEABCACA
+
+arraydescriptordata :: Tmp.Label -> Bool -> [Instr]
+arraydescriptordata lab isptr = [
+                                  DIRECTIVE ".data"
+                                , TigerAssem.LABEL (TGSLT.name lab)
+                                , DIRECTIVE $ ".4byte 0x" ++ (showHex arraymagicnumber "")
+                                , DIRECTIVE $ ".4byte " ++ if isptr then "1" else "0"
+                                ]
+
 
 -- Codegen Monad
 type Codegen = StateT [Instr] (TGSLT.GenSymLabTmp Identity)

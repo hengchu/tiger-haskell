@@ -31,6 +31,10 @@ data Frag = PROC { procName  :: Label
                  , procFrame :: Frame }
           | DATA { dataLab :: Label
                  , dataStr :: String }
+          | GCDESCREC { descLab :: Label
+                      , descStr :: String }
+          | GCDESCARR { descLab :: Label 
+                      , descIsPtr :: Bool }
           deriving (Show, Eq)
 
 prettyprintfrag :: Frag -> String

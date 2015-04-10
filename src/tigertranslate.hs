@@ -202,8 +202,7 @@ stringExp :: String -> SemTr Gexp
 stringExp str =
   do lab <- newLabel
      let frag = Frame.DATA lab str
-     frags <- getFragList
-     putFragList $ frag:frags
+     createDataFrag frag
      return $ Ex $ NAME lab
 
 
@@ -232,12 +231,22 @@ assign var assgnval =
 createRecord :: [(Gexp,Bool)] -> SemTr Gexp
 createRecord fieldvarsAndIsPtrs =
   do let (fieldvars, isptrs) = unzip fieldvarsAndIsPtrs
+
+     let bool2descriptor True = 'P'
+         bool2descriptor False = 'N'
+
+     let descriptors = map bool2descriptor isptrs
+     descriptorlab <- newLabel
+     let descriptorFrag = Frame.GCDESCREC descriptorlab descriptors
+     createDescFrag descriptorFrag
+
      let isaptr = True
      address <- newTemp isaptr
      allocfunlab <- namedLabel "allocRecord"
      retlab <- newRetLabel
-     let alloc = MOVE(TEMP address isaptr, CALL (NAME allocfunlab, [CONST (4 * length fieldvars) False]) True retlab)
-     let idxs  = [0..length fieldvars-1]
+
+     let alloc = MOVE(TEMP address isaptr, CALL (NAME allocfunlab, [CONST (4 * length fieldvars) False, NAME descriptorlab]) True retlab)
+     let idxs  = [1..length fieldvars]
      instrs <- mapM (uncurry $ initfield address isptrs) $ zip fieldvars idxs
      return $ Ex $ ESEQ(seqcon $ alloc:instrs, TEMP address isaptr)
   where initfield address isptrs fieldvar idx = do 
@@ -252,8 +261,14 @@ createArray sizexp initexp =
   do sizexp'  <- unEx sizexp
      initexp' <- unEx initexp
      allocarrfun <- namedLabel "allocArray"
+
      retlab <- newRetLabel
-     return $ Ex $ CALL (NAME allocarrfun, [sizexp', initexp']) True retlab
+
+     desclab <- newLabel
+     let descriptors = Frame.GCDESCARR desclab $ isExpPtr initexp'
+     createDescFrag descriptors
+
+     return $ Ex $ CALL (NAME allocarrfun, [sizexp', initexp', NAME desclab]) True retlab
 
 -- Variable access
 field :: Gexp -> Int -> Bool -> SemTr Gexp
@@ -409,6 +424,23 @@ createMainFrag lvl bodyge =
   do mainlab <- namedLabel "tigermain"
      createProcFrag mainlab lvl bodyge False
 
+createDataFrag :: Frag -> SemTr ()
+createDataFrag f@(Frame.DATA _ _) = do
+  frags <- getFragList
+  putFragList $ f:frags
+createDataFrag _ = error "Compiler error: createDataFrag called with non-DATA fragment."
+
+createDescFrag :: Frag -> SemTr ()
+createDescFrag f@(Frame.GCDESCREC _ _) = do
+  frags <- getFragList
+  putFragList $ f:frags
+
+createDescFrag f@(Frame.GCDESCARR _ _) = do
+  frags <- getFragList
+  putFragList $ f:frags
+
+createDescFrag _ = error "Compiler error: createDescFrag called with non-DESC fragment."
+  
 reset :: SemTr ()
 reset = putFragList []
 
