@@ -103,6 +103,15 @@ codegen' s0 =
     genCall f retlab args shouldsavecaller =
       do let calldefs = map named [EAX, ECX, EDX]
          when (shouldsavecaller) saveCallerSaves
+         emit $ comment "Entering GC"
+         emit $ OPER PUSHA (map named [EAX, EBX, ECX, EDX, EDI, ESI, EBP, ESP]) [named ESP] Nothing
+         emit $ OPER (PUSH $ named ESP) [named ESP] [named ESP] Nothing
+         emit $ OPER (LEAL (TGSLT.name retlab) (named EAX)) [] [named EAX] Nothing
+         emit $ OPER (PUSH $ named EAX) [named EAX] [named ESP] Nothing
+         emit $ OPER (CALLL "gcentry" dummyRetLab) [named ESP] (map named [ESP, EBP]) Nothing
+         emit $ OPER (ADDCR 8 $ named ESP) [named ESP] [named ESP] Nothing
+         emit $ OPER POPA [named ESP] (map named [EAX, EBX, ECX, EDX, EDI, ESI, EBP, ESP]) Nothing
+         emit $ comment "Exiting GC"
          emit $ comment "Pushing arguments on stack in reverse order"
          mapM_ munchArg $ reverse args
          emit $ comment "Done pushing arguments"
@@ -357,9 +366,12 @@ tmap2rmap tmps tmap color =
              focusedtmap
   in  rmap
 
+dummyRetLab :: Tmp.RetLabel
+dummyRetLab = ("", 0)
+
 iscallassem :: Assem -> Bool
-iscallassem (CALLL _ _) = True
-iscallassem (CALLR _ _) = True
+iscallassem (CALLL _ r) = r /= dummyRetLab
+iscallassem (CALLR _ r) = r /= dummyRetLab
 iscallassem _ = False
 
 iscallinstr :: Instr -> Bool
@@ -474,12 +486,12 @@ procEntryExit name
      emitPro $ OPER (PUSH $ Tmp.Named EBP) [Tmp.Named EBP] [Tmp.Named ESP] Nothing
      emitPro $ MOV (MOVRR (Tmp.Named ESP) (Tmp.Named EBP)) (Tmp.Named ESP) (Tmp.Named EBP)
      emitPro $ OPER (PUSH $ Tmp.Named ESP) [Tmp.Named ESP] [Tmp.Named ESP] Nothing
-     emitPro $ OPER (CALLL "update_top_stack" ("", 0)) [] [] Nothing
+     emitPro $ OPER (CALLL "update_top_stack" dummyRetLab) [] [] Nothing
      emitPro $ OPER (ADDCR 4 (Tmp.Named ESP)) [] [] Nothing
      emitPro $ comment "allocating space for locals"
      emitPro $ OPER (SUBCR (numlocals*4+npseudoregs*4) (Tmp.Named ESP)) [Tmp.Named ESP] [] Nothing
      emitPro $ OPER (PUSH $ Tmp.Named ESP) [Tmp.Named ESP] [Tmp.Named ESP] Nothing
-     emitPro $ OPER (CALLL "update_bot_stack" ("", 0)) [] [] Nothing
+     emitPro $ OPER (CALLL "update_bot_stack" dummyRetLab) [] [] Nothing
      emitPro $ OPER (ADDCR 4 (Tmp.Named ESP)) [] [] Nothing
      emitPro $ comment "prologue ends here"
 
@@ -488,6 +500,7 @@ procEntryExit name
      emitEpi $ OPER (POP (Tmp.Named EBP)) [] [Tmp.Named EBP] Nothing
      emitEpi $ OPER RET [] [] Nothing
      mapM_ emitEpi (makePtrMaps stackmapfixed rmaps)
+     emitEpi $ comment "epilogue ends here"
 
      let spilledInstrs = concatMap (genSpill alloc) instrs
      proInstrs <- readIORef prologue

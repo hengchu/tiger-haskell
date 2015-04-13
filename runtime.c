@@ -2,6 +2,8 @@
 #include <stdlib.h>
 #include "gcinit.h"
 
+extern int tigermain(int);
+
 int *allocArray(int size, int init, int descriptor)
 {
   int i;
