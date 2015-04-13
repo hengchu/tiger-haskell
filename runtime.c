@@ -1,13 +1,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "gcinit.h"
+#include "heap.h"
 
 extern int tigermain(int);
 
 int *allocArray(int size, int init, int descriptor)
 {
   int i;
-  int *a = (int *)malloc((2+size)*sizeof(int));
+  int *a = (int *)halloc((2+size)*sizeof(int));
   printf("size = %d, init = %d, descriptor = 0x%x\n", size, init, descriptor);
   a[0] = descriptor;
   a[1] = size;
@@ -19,7 +20,7 @@ int *allocRecord(int size, int descriptor)
 {
   int i;
   int *p, *a;
-  p = a = (int *)malloc(size+sizeof(int));
+  p = a = (int *)halloc(size+sizeof(int));
   for(i=sizeof(int);i<size;i+=sizeof(int)) *p++ = 0;
   a[0] = descriptor;
   return a;
@@ -93,8 +94,11 @@ int main()
     consts[i].length=1;
     consts[i].chars[0]=i;
   }
+  heap_init();
   gc_init();
   int rv = tigermain(0 /* static link!? */);
+  gc_finalize();
+  heap_finalize();
   return rv;
 }
 
@@ -128,7 +132,7 @@ struct string *substring(struct string *s, int first, int n)
   }
   if (n==1) return consts+s->chars[first];
   {
-    struct string *t = (struct string *)malloc(sizeof(int)+n);
+    struct string *t = (struct string *)halloc(sizeof(int)+n);
     int i;
     t->length=n;
     for(i=0;i<n;i++) t->chars[i]=s->chars[first+i];
@@ -149,7 +153,7 @@ struct string *concat(struct string *a, struct string *b)
   else 
   {
     int i, n=a->length+b->length;
-    struct string *t = (struct string *)malloc(sizeof(int)+n);
+    struct string *t = (struct string *)halloc(sizeof(int)+n);
     t->length=n;
     for (i=0;i<a->length;i++)
       t->chars[i]=a->chars[i];

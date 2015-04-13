@@ -82,6 +82,11 @@ void gc_init(void)
   }
 }
 
+void gc_finalize(void)
+{
+  hm_deletemap(PMTable);
+}
+
 uint32_t walk_stack_usage(int32_t *stack_usage)
 {
   uint32_t idx = 0;
