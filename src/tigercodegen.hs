@@ -15,8 +15,11 @@ import TigerRegisters
 import TigerITree
 import qualified TigerGenSymLabTmp as TGSLT
 import Prelude hiding (EQ, LT, GT)
+import Control.Monad
 import Control.Monad.State
 import Control.Monad.Identity
+import Control.Arrow (first)
+import Data.Maybe
 import qualified Data.Map as Map
 import qualified Data.List as List
 import Data.IORef
@@ -40,7 +43,7 @@ stringdata :: Tmp.Label -> String -> [Instr]
 stringdata lab str = [
                        DIRECTIVE ".data"
                      , TigerAssem.LABEL (TGSLT.name lab)
-                     , DIRECTIVE $ ".4byte " ++ (show $ length str)
+                     , DIRECTIVE $ ".4byte " ++ show (length str)
                      , DIRECTIVE $ ".string " ++ show str
                      ]
 
@@ -51,8 +54,8 @@ recorddescriptordata :: Tmp.Label -> String -> [Instr]
 recorddescriptordata lab str = [
                                  DIRECTIVE ".data"
                                , TigerAssem.LABEL (TGSLT.name lab)
-                               , DIRECTIVE $ ".4byte 0x" ++ (showHex recordmagicnumber "")
-                               , DIRECTIVE $ ".4byte " ++ (show $ length str)
+                               , DIRECTIVE $ ".4byte 0x" ++ showHex recordmagicnumber ""
+                               , DIRECTIVE $ ".4byte " ++ show (length str)
                                , DIRECTIVE $ ".string " ++ show str
                                ]
 
@@ -63,7 +66,7 @@ arraydescriptordata :: Tmp.Label -> Bool -> [Instr]
 arraydescriptordata lab isptr = [
                                   DIRECTIVE ".data"
                                 , TigerAssem.LABEL (TGSLT.name lab)
-                                , DIRECTIVE $ ".4byte 0x" ++ (showHex arraymagicnumber "")
+                                , DIRECTIVE $ ".4byte 0x" ++ showHex arraymagicnumber ""
                                 , DIRECTIVE $ ".4byte " ++ if isptr then "1" else "0"
                                 ]
 
@@ -73,12 +76,6 @@ type Codegen = StateT [Instr] (TGSLT.GenSymLabTmp Identity)
 
 newTemp :: Bool -> Codegen Tmp.Temp
 newTemp = lift . TGSLT.newTemp
-
-newLabel :: Codegen Tmp.Label
-newLabel = lift $ TGSLT.newLabel
-
-namedLabel :: String -> Codegen Tmp.Label
-namedLabel = lift . TGSLT.namedLabel
 
 emit :: Instr -> Codegen ()
 emit instr = do instrs <- get
@@ -102,7 +99,7 @@ codegen' s0 =
     genCall :: Tmp.Label -> Tmp.RetLabel -> [Exp] -> Bool -> Codegen ()
     genCall f retlab args shouldsavecaller =
       do let calldefs = map named [EAX, ECX, EDX]
-         when (shouldsavecaller) saveCallerSaves
+         when shouldsavecaller saveCallerSaves
          emit $ comment "Entering GC"
          emit $ OPER PUSHA (map named [EAX, EBX, ECX, EDX, EDI, ESI, EBP, ESP]) [named ESP] Nothing
          emit $ OPER (PUSH $ named ESP) [named ESP] [named ESP] Nothing
@@ -118,12 +115,12 @@ codegen' s0 =
          emit $ OPER (CALLL (TGSLT.name f) retlab) [named ESP] (calldefs ++ map named [ESP, EBP])
                 Nothing
          emit $ TigerAssem.LABEL $ TGSLT.name retlab
-         when (length args > 0) $
+         unless (null args) $
            do emit $ comment "Free arguments from stack"
               emit $ OPER (ADDCR (length args * 4) (named ESP))
                           [named ESP] (map named [ESP]) Nothing
               emit $ comment "Done freeing arguments from stack"
-         when (shouldsavecaller) restoreCallerSaves
+         when shouldsavecaller restoreCallerSaves
 
     saveCallerSaves :: Codegen ()
     saveCallerSaves =
@@ -150,22 +147,22 @@ codegen' s0 =
 
     munchStm :: Stm -> Codegen ()
     munchStm (SEQ(_, _)) = error "Compiler error: ITree is not canonicalized."
-    munchStm (MOVE(TEMP t istptr, CALL(NAME f, args) iscptr retlab)) =
+    munchStm (MOVE(TEMP t _, CALL(NAME f, args) _ retlab)) =
       do saveCallerSaves
          genCall f retlab args False
          emit $ comment $ "saving RV into " ++ show t
          emit $ MOV (MOVRR (named EAX) (Tmp.DST 0)) (named EAX) t
          restoreCallerSaves
 
-    munchStm (MOVE(TEMP t istptr, e)) =
+    munchStm (MOVE(TEMP t _, e)) =
       do src <- munchExp e
          emit $ MOV (MOVRR (Tmp.SRC 0) (Tmp.DST 0)) src t
 
-    munchStm (MOVE(MEM(TEMP tmp istptr, sz) ismemptr, e)) =
+    munchStm (MOVE(MEM(TEMP tmp _, _) _, e)) =
       do src <- munchExp e
          emit $ OPER (MOVRM (Tmp.SRC 1) $ mkaddr (Tmp.SRC 0) 0) [tmp, src] [] Nothing
 
-    munchStm (MOVE(MEM(BINOP(PLUS, e1, CONST i isiptr) isbptr, sz) ismemptr, e2)) =
+    munchStm (MOVE(MEM(BINOP(PLUS, e1, CONST i _) _, _) _, e2)) =
       do src1 <- munchExp e1
          src2 <- munchExp e2
          emit $ OPER (MOVRM (Tmp.SRC 1) $ mkaddr (Tmp.SRC 0) i) [src1, src2] [] Nothing
@@ -173,25 +170,25 @@ codegen' s0 =
     munchStm (MOVE(MEM(BINOP(PLUS, CONST i isiptr, e1) isbptr, sz) ismemptr, e2)) =
       munchStm (MOVE(MEM(BINOP(PLUS, e1, CONST i isiptr) isbptr, sz) ismemptr, e2))
 
-    munchStm (MOVE(MEM(BINOP(MINUS, e1, CONST i isiptr) isbptr, sz) ismemptr, e2)) =
+    munchStm (MOVE(MEM(BINOP(MINUS, e1, CONST i _) _, _) _, e2)) =
       do src1 <- munchExp e1
          src2 <- munchExp e2
          emit $ OPER (MOVRM (Tmp.SRC 1) $ mkaddr (Tmp.SRC 0) $ -i) [src1, src2] [] Nothing
 
-    munchStm (MOVE(MEM(BINOP(MINUS, CONST i isiptr, e1) isbptr, sz) ismemptr, e2)) =
+    munchStm (MOVE(MEM(BINOP(MINUS, CONST i _, e1) _, _) _, e2)) =
       do src1 <- munchExp e1
          src2 <- munchExp e2
          emit $ OPER (NEGR (Tmp.SRC 0)) [src1] [] Nothing
          emit $ OPER (MOVRM (Tmp.SRC 1) $ mkaddr (Tmp.SRC 0) i) [src1, src2] [] Nothing
 
-    munchStm (MOVE(MEM(e1, sz1) ismem1ptr, MEM(e2, sz2) ismem2ptr)) =
+    munchStm (MOVE(MEM(e1, _) _, MEM(e2, _) ismem2ptr)) =
       do src1 <- munchExp e1
          src2 <- munchExp e2
          t <- newTemp ismem2ptr
          emit $ OPER (MOVMR (mkaddr (Tmp.SRC 0) 0) (Tmp.DST 0)) [src2] [t] Nothing
          emit $ OPER (MOVRM (Tmp.SRC 1) (mkaddr (Tmp.SRC 0) 0)) [src1, t] [] Nothing
 
-    munchStm (MOVE(MEM(e1, sz) ismemptr, e2)) =
+    munchStm (MOVE(MEM(e1, _) _, e2)) =
       do src1 <- munchExp e1
          src2 <- munchExp e2
          emit $ OPER (MOVRM (Tmp.SRC 1) (mkaddr (Tmp.SRC 0) 0)) [src1, src2] [] Nothing
@@ -202,7 +199,7 @@ codegen' s0 =
          emit $ OPER (MOVRR (Tmp.SRC 0) (Tmp.DST 0)) [src2] [src1] Nothing
 
     munchStm (JUMP(NAME lab, lablist)) =
-      do emit $ OPER (JMP $ TGSLT.name lab) [] [] (Just $ map TGSLT.name lablist)
+      emit $ OPER (JMP $ TGSLT.name lab) [] [] (Just $ map TGSLT.name lablist)
 
     munchStm (CJUMP(TEST(relop, e1, e2), lab1, lab2)) =
       do src1 <- munchExp e1
@@ -214,25 +211,25 @@ codegen' s0 =
     munchStm (TigerITree.LABEL lab) =
       emit $ TigerAssem.LABEL (TGSLT.name lab)
 
-    munchStm (EXP(CALL(NAME f, args) iscptr retlab)) =
+    munchStm (EXP(CALL(NAME f, args) _ retlab)) =
       genCall f retlab args True
 
-    munchStm (EXP(e)) =
-      munchExp e >> return ()
+    munchStm (EXP e) =
+      void $ munchExp e
 
     munchStm _ = error "Compiler error: Impossible pattern in munchStm."
 
     munchExp :: Exp -> Codegen Tmp.Temp
     munchExp (ESEQ(_, _)) = error "Compiler error: ITree is not canonicalized."
 
-    munchExp (TEMP t istptr) = return t
+    munchExp (TEMP t _) = return t
 
-    munchExp (MEM(CONST i isiptr, sz) ismemptr) =
+    munchExp (MEM(CONST i _, _) _) =
       do r <- newTemp True
          emit $ OPER (MOVMR (mkaddr (named ZERO) i) (Tmp.DST 0)) [] [r] Nothing
          return r
 
-    munchExp (MEM(BINOP(PLUS, e, CONST i isiptr) isbptr, sz) ismemptr) =
+    munchExp (MEM(BINOP(PLUS, e, CONST i _) _, _) _) =
       do t <- munchExp e
          r <- newTemp True
          emit $ OPER (MOVMR (mkaddr (Tmp.SRC 0) i) (Tmp.DST 0)) [t] [r] Nothing
@@ -241,13 +238,13 @@ codegen' s0 =
     munchExp (MEM(BINOP(PLUS, CONST i isiptr, e) isbptr, sz) ismemptr) =
       munchExp (MEM(BINOP(PLUS, e, CONST i isiptr) isbptr, sz) ismemptr)
 
-    munchExp (MEM(BINOP(MINUS, e, CONST i isiptr) isbptr, sz) ismemptr) =
+    munchExp (MEM(BINOP(MINUS, e, CONST i _) _, _) _) =
       do t <- munchExp e
          r <- newTemp True
          emit $ OPER (MOVMR (mkaddr (Tmp.SRC 0) (-i)) (Tmp.DST 0)) [t] [r] Nothing
          return r
 
-    munchExp (MEM(e, sz) ismemptr) =
+    munchExp (MEM(e, _) ismemptr) =
       do t <- munchExp e
          r <- newTemp ismemptr
          emit $ OPER (MOVMR (mkaddr (Tmp.SRC 0) 0) (Tmp.DST 0)) [t] [r] Nothing
@@ -279,7 +276,7 @@ codegen' s0 =
          emit $ OPER (MOVRR (named EAX) (Tmp.DST 0)) [named EAX] [r] Nothing
          return r
 
-    munchExp (BINOP(PLUS, CONST i isiptr, e) isbptr) =
+    munchExp (BINOP(PLUS, CONST i _, e) isbptr) =
       do t <- munchExp e
          r <- newTemp isbptr
          emit $ MOV (MOVRR (Tmp.SRC 0) (Tmp.DST 0)) t r
@@ -289,25 +286,25 @@ codegen' s0 =
     munchExp (BINOP(PLUS, e, CONST i isiptr) isbptr) =
       munchExp (BINOP(PLUS, CONST i isiptr, e) isbptr)
 
-    munchExp (BINOP(PLUS, e1, e2) isbptr) =
+    munchExp (BINOP(PLUS, e1, e2) _) =
       do t1 <- munchExp e1
          t2 <- munchExp e2
          emit $ OPER (ADDRR (Tmp.SRC 0) (Tmp.DST 0)) [t1, t2] [t2] Nothing
          return t2
 
-    munchExp (BINOP(MINUS, e1, e2) isbptr) =
+    munchExp (BINOP(MINUS, e1, e2) _) =
       do t1 <- munchExp e1
          t2 <- munchExp e2
          emit $ OPER (SUBRR (Tmp.SRC 1) (Tmp.DST 0)) [t1, t2] [t1] Nothing
          return t1
 
-    munchExp (BINOP(AND, e1, e2) isbptr) =
+    munchExp (BINOP(AND, e1, e2) _) =
       do t1 <- munchExp e1
          t2 <- munchExp e2
          emit $ OPER (ANDRR (Tmp.SRC 0) (Tmp.DST 0)) [t1, t2] [t2] Nothing
          return t2
 
-    munchExp (BINOP(OR, e1, e2) isbptr) =
+    munchExp (BINOP(OR, e1, e2) _) =
       do t1 <- munchExp e1
          t2 <- munchExp e2
          emit $ OPER (ORRR (Tmp.SRC 0) (Tmp.DST 0)) [t1, t2] [t2] Nothing
@@ -326,21 +323,21 @@ codegen' s0 =
     munchExp e = error $ "Compiler error: Impossible pattern: " ++ show e ++ "."
 
     munchArg :: Exp -> Codegen ()
-    munchArg (CONST i isiptr) =
+    munchArg (CONST i _) =
       emit $ OPER (PUSHC i) [named ESP] [named ESP] Nothing
 
-    munchArg (MEM(BINOP(PLUS, e, CONST i isiptr) isbptr, sz) ismemptr) =
+    munchArg (MEM(BINOP(PLUS, e, CONST i _) _, _) _) =
       do t <- munchExp e
          emit $ OPER (PUSHM (mkaddr (Tmp.SRC 0) i)) [t, named ESP] [named ESP] Nothing
 
     munchArg (MEM(BINOP(PLUS, CONST i isiptr, e) isbptr, sz) ismemptr) =
       munchArg (MEM(BINOP(PLUS, e, CONST i isiptr) isbptr, sz) ismemptr)
 
-    munchArg (MEM(BINOP(MINUS, e, CONST i isiptr) isbptr, sz) ismemptr) =
+    munchArg (MEM(BINOP(MINUS, e, CONST i _) _, _) _) =
       do t <- munchExp e
          emit $ OPER (PUSHM (mkaddr (Tmp.SRC 0) (-i))) [t, named ESP] [named ESP] Nothing
 
-    munchArg (MEM(e, sz) ismemptr) =
+    munchArg (MEM(e, _) _) =
       do t <- munchExp e
          emit $ OPER (PUSHM $ mkaddr (Tmp.SRC 0) 0) [t, named ESP] [named ESP] Nothing
 
@@ -360,9 +357,7 @@ type SMap = Map.Map Int Bool
 tmap2rmap :: [Tmp.Temp] -> TMap -> ColorResult -> RMap
 tmap2rmap tmps tmap color =
   let focusedtmap = Map.fromList $ filter (\(t, _) -> t `elem` tmps) $ Map.toList tmap
-      rmap = Map.mapKeys (\t -> case Map.lookup t color of
-                                  Just r -> r
-                                  Nothing -> error $ show t ++ " not found in color map!")
+      rmap = Map.mapKeys (\t -> fromMaybe (error $ show t ++ " not found in color map!") $ Map.lookup t color) 
              focusedtmap
   in  rmap
 
@@ -379,7 +374,7 @@ iscallinstr OPER{opAssem=assem} = iscallassem assem
 iscallinstr _ = False
 
 findAllCalls :: [(Instr, [Tmp.Temp])] -> [(Instr, [Tmp.Temp])]
-findAllCalls instrs = filter (\(i, _) -> iscallinstr i) instrs
+findAllCalls = filter (\(i, _) -> iscallinstr i)
 
 extractRetLabAssem :: Assem -> Tmp.RetLabel
 extractRetLabAssem (CALLL _ retlab) = retlab
@@ -393,7 +388,7 @@ extractRetLabInstr _ = error "Compiler Error: extractRetLab called with non-CALL
 makeRMaps :: [(Instr, [Tmp.Temp])] -> TMap -> ColorResult -> Map.Map Tmp.RetLabel RMap
 makeRMaps instrs tmap color =
   let callinstrs = findAllCalls instrs
-      retlivetemps = map (\(i, t) -> (extractRetLabInstr i, t)) callinstrs
+      retlivetemps = map (first extractRetLabInstr) callinstrs
       retrmaps = map (\(rl, ts) -> (rl, tmap2rmap ts tmap color)) retlivetemps
   in  Map.fromList retrmaps
 
@@ -407,7 +402,7 @@ makeRegDirective rmap =
                     _         -> False
         regbit :: [Bool] -> Int -> Word32 -> Word32
         regbit [] _ res        = res
-        regbit (True:ts) i res = regbit ts (i+1) ((bit i) .|. res)
+        regbit (True:ts) i res = regbit ts (i+1) (bit i .|. res)
         regbit (_:ts) i res    = regbit ts (i+1) res
 
 ispseudo :: Register -> Bool
@@ -420,14 +415,14 @@ makePseudoRegDirective rmap =
       focusedpmap = Map.filter id focusedrmap
       focusedlist = Map.toList focusedpmap
       directives  = map (\(PSEUDO d, _) -> ".4byte " ++ show (-4*d)) focusedlist
-  in  (concat . List.intersperse "\n") directives
+  in  List.intercalate "\n" directives
 
 makeStackDirective :: SMap -> String
 makeStackDirective smap =
   let focusedsmap = Map.filter id smap
       focusedslist = Map.toList focusedsmap
       directives = map (\(v, _) -> ".4byte " ++ show v) focusedslist
-  in (concat . List.intersperse "\n") directives
+  in List.intercalate "\n" directives
 
 makePtrMap :: (Tmp.RetLabel, RMap) -> SMap -> [Instr]
 makePtrMap (retlab, rmap) stackmap =
@@ -450,7 +445,7 @@ makePtrMap (retlab, rmap) stackmap =
 makePtrMaps :: SMap -> Map.Map Tmp.RetLabel RMap -> [Instr]
 makePtrMaps smap rmaps =
   let rmaplist = Map.toList rmaps
-      instrs = map (flip makePtrMap smap) rmaplist
+      instrs = map (`makePtrMap` smap) rmaplist
   in  concat instrs
 
 procEntryExit :: Tmp.Label 
@@ -463,7 +458,7 @@ procEntryExit :: Tmp.Label
 procEntryExit name
               instrAndLiveTemps
               alloc
-              formals
+              _ 
               frame
               tempmap =
   do let instrs = map fst instrAndLiveTemps
@@ -505,7 +500,7 @@ procEntryExit name
      let spilledInstrs = concatMap (genSpill alloc) instrs
      proInstrs <- readIORef prologue
      epiInstrs <- readIORef epilogue
-     return $ (reverse proInstrs) ++ spilledInstrs ++ (reverse epiInstrs)
+     return $ reverse proInstrs ++ spilledInstrs ++ reverse epiInstrs
 
 
 pseudoreg2addr :: Register -> Addr
@@ -517,9 +512,6 @@ genSpill alloc instr =
   let
 
     availmregs = [ECX, EDX]
-
-    ispseudo (PSEUDO _) = True
-    ispseudo _ = False
 
     loadfreg src@(PSEUDO _) mreg =
       ([ COMMENT ("loading src pseudoreg: "++show src++" into machine reg: "++show mreg)
@@ -542,14 +534,13 @@ genSpill alloc instr =
         else ([], srcs)
 
     tmp2reg (Tmp.Named r) = r
-    tmp2reg t = case Map.lookup t alloc of
-                     Just r -> r
-                     Nothing -> error $ "Compiler error: genSpill encountered non-colored temp: "++show t++"."
+    tmp2reg t = fromMaybe err $ Map.lookup t alloc
+                  where err = error $ "Compiler error: genSpill encountered non-colored temp: "++show t++"."
 
     mapdsts [] _ _ = ([], [])
     mapdsts ds@(dst:dsts) srcs newsrcs =
       if any ispseudo ds
-        then let found = List.findIndex (dst==) srcs
+        then let found = List.elemIndex dst srcs
              in  case found of
                    Just idx -> let src = srcs !! idx
                                    mreg = newsrcs !! idx

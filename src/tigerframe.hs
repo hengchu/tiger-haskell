@@ -43,6 +43,7 @@ prettyprintfrag (PROC n body _) = let fname = name n
                                   in  fname ++ ":\n" ++ fbody
 prettyprintfrag (DATA n str) = let fname = name n
                                in  fname ++ ":\n" ++ show str
+prettyprintfrag _ = ""
 
 newFrame :: Int -> IO (Frame, [Offset])
 newFrame numFormals = 

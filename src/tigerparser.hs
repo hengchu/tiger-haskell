@@ -1,3 +1,6 @@
+{-# OPTIONS_GHC -fno-warn-unused-do-bind #-}
+{-# OPTIONS_GHC -fno-warn-missing-signatures #-}
+
 module TigerParser
   (
     token2ptoken
@@ -14,7 +17,7 @@ import Text.Parsec hiding ((<|>))
 import Text.Parsec.Expr
 import TigerSymbol
 import qualified TigerGenSymLabTmp as TGSLT
-import Control.Applicative ((<|>), (<*), (*>))
+import Control.Applicative ((<|>), (*>))
 import Control.Monad
 import Data.Functor.Identity
 import Control.Monad.Trans.Class
@@ -27,8 +30,8 @@ instance Position PToken where
 
 instance Position Var where
   extractPosition (SimpleVar(_, pos))       = pos
-  extractPosition (FieldVar(v, _, pos))     = pos
-  extractPosition (SubscriptVar(v, _, pos)) = pos
+  extractPosition (FieldVar(_, _, pos))     = pos
+  extractPosition (SubscriptVar(_, _, pos)) = pos
 
 instance Position Exp where
   extractPosition (VarExp v) = extractPosition v
@@ -118,7 +121,7 @@ binaryOp op pos a b = OpExp { opLeft = a
                             , opPos = pos }
 
 prefix parseOp fun  = Prefix (try $ do {p <- parseOp; return $ fun $ extractPosition p})
-postfix parseOp fun = Postfix (try $ do {p <- parseOp; return $ fun $ extractPosition p})
+--postfix parseOp fun = Postfix (try $ do {p <- parseOp; return $ fun $ extractPosition p})
 binary parseOp fun  = Infix (try $ do {p <- parseOp; return $ fun $ extractPosition p})
 
 expr = buildExpressionParser table pExpTerm
@@ -202,10 +205,10 @@ pLValue1 =
      let simplevar = SimpleVar (varidsym, extractPosition p)
      return $ case maybetail of
                 Nothing   -> simplevar
-                Just tail -> attachTail simplevar tail
+                Just ltail -> attachTail simplevar ltail
   where pLValue' = try option1 <|> try option2 <|> try pDotId <|> pBracketExp
         pDotId = do dottok <- parseSimpleToken DOT
-                    (p, fieldid) <- parseId
+                    (_, fieldid) <- parseId
                     fieldidsym <- symbol fieldid
                     return [Dot fieldidsym (extractPosition dottok)]
         pBracketExp = do lbraktok <- parseSimpleToken LBRAK
@@ -314,12 +317,12 @@ pVardec =
 
 pLet =
   do lettok <- parseSimpleToken LET
-     decs <- pDecs
+     decls <- pDecs
      parseSimpleToken IN
      es <- expr `sepBy` (parseSimpleToken SEMICOLON)
      let poses = map extractPosition es
      parseSimpleToken END
-     return $ LetExp { letDecs=decs
+     return $ LetExp { letDecs=decls
                      , letBody= SeqExp $ zip es poses
                      , letPos=extractPosition lettok }
 
@@ -375,7 +378,7 @@ pTyfield =
                      , tfieldPos = extractPosition p }
 
 pTy = try pRecordDef <|> try pArrayDec <|> pTypeIdDef
-  where pRecordDef = do lbracetok <- parseSimpleToken LBRAC
+  where pRecordDef = do _ <- parseSimpleToken LBRAC
                         tfields <- pTyfields
                         parseSimpleToken RBRAC
                         return $ RecordTy tfields
@@ -401,8 +404,8 @@ parser = try expr2 <|> decs
 runParser :: Parser a -> String 
                       -> [PToken] 
                       -> Either ParseError (a, TGSLT.GenSymLabTmpState)
-runParser p filename tokens =
-  let tgsltmonad = runPT p () filename tokens
+runParser p filename ptokens =
+  let tgsltmonad = runPT p () filename ptokens
       identitymonad = TGSLT.runGSLT TGSLT.initialGSLTState tgsltmonad
       (result, gsltstate) = runIdentity identitymonad
   in case result of

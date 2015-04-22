@@ -21,6 +21,7 @@ import Data.Maybe
 
 type GexpTy = (TTra.Gexp, Ty)
 
+-- Functions used to report error
 cyclicTypeError :: TLex.AlexPosn -> [String] -> SemantError
 cyclicTypeError pos types = SE pos $ TypeLoop types
 
@@ -71,6 +72,9 @@ actualTy' pos a searched = do if a `elem` searched
                                  then throwError $ cyclicTypeError pos $ map show searched
                                  else return a
 
+actualTy :: TLex.AlexPosn -> Ty -> SemTr Ty
+actualTy pos ty = actualTy' pos ty []
+
 isPointer :: Ty -> SemTr Bool
 isPointer String     = return False
 isPointer INT        = return False
@@ -82,8 +86,6 @@ isPointer Nil        = return False
 isPointer (Array _)  = return True
 isPointer (Record _) = return True
 
-actualTy :: TLex.AlexPosn -> Ty -> SemTr Ty
-actualTy pos ty = actualTy' pos ty []
 
 withBinding :: Venv -> Tenv -> SemTr a -> SemTr a
 withBinding v t checker = do 
@@ -123,22 +125,16 @@ addfunctiontobinding sym lvl lab params result = do
   let v' = Map.insert sym fentry v
   putVenv v'
 
-isarraytyp :: Ty -> Bool
-isarraytyp (Array _) = True
-isarraytyp _         = False
-
-isrecordtyp :: Ty -> Bool
-isrecordtyp (Record _) = True
-isrecordtyp _              = False
-
+{-
 zipWithM4 :: Monad m => (a -> b -> c -> d -> m e) -> [a] -> [b] -> [c] -> [d] -> m [e]
 zipWithM4 f (a:args1) (b:args2) (c:args3) (d:args4) = do
   e <- f a b c d
   es <- zipWithM4 f args1 args2 args3 args4
   return $ e:es
 
-zipWithM4 f [] [] [] [] = return []
+zipWithM4 _ [] [] [] [] = return []
 zipWithM4 _ _ _ _ _ = error "zipWithM4: Args 1..4 must have the same length."
+-}
 
 zipWithM5 :: (Show a, Show b, Show c, Show d, Show e, Monad m) => (a -> b -> c -> d -> e -> m g) -> [a] -> [b] -> [c] -> [d] -> [e] -> m [g]
 zipWithM5 f (a:args1) (b:args2) (c:args3) (d:args4) (e:args5)= do
@@ -146,16 +142,18 @@ zipWithM5 f (a:args1) (b:args2) (c:args3) (d:args4) (e:args5)= do
   gs <- zipWithM5 f args1 args2 args3 args4 args5
   return $ g:gs
 
-zipWithM5 f [] [] [] [] [] = return []
-zipWithM5 _ a b c d e = error $ "zipWithM5: Args 1..5 must have the same length." {- ++ show a ++ "\n" 
+zipWithM5 _ [] [] [] [] [] = return []
+zipWithM5 _ _ _ _ _ _ = error $ "zipWithM5: Args 1..5 must have the same length." {- ++ show a ++ "\n" 
                                                                                     ++ show b ++ "\n"
                                                                                     ++ show c ++ "\n" 
                                                                                     ++ show d ++ "\n"
                                                                                     ++ show e -}
 
+nestedZip :: [[a]] -> [[b]] -> [[(a, b)]]
+nestedZip as bs = zipWith zip as bs
+
 zipTypePos :: [[TSym.Symbol]] -> [[TLex.AlexPosn]] -> [[(TSym.Symbol, TLex.AlexPosn)]]
-zipTypePos typsyms poses = zipWith zipTyppos' typsyms poses
-  where zipTyppos' syms poses = zip syms poses
+zipTypePos = nestedZip
 
 
 transdec :: TTra.Level -> Maybe TTmp.Label -> TAbs.Dec -> SemTr (Venv, Tenv, [TTra.Gexp])
@@ -396,7 +394,7 @@ transexp lvl lab absexp =
                                      return (gexp, Unit)
                      Nothing -> throwError $ breakOutOfLoop pos
               else throwError $ breakOutOfLoop pos
-      g (TAbs.LetExp {TAbs.letDecs=decs, TAbs.letBody=bodyexp, TAbs.letPos=pos}) =
+      g (TAbs.LetExp {TAbs.letDecs=decs, TAbs.letBody=bodyexp}) =
         let transdecs (d:[]) = transdec lvl lab d
             transdecs (d:ds) = do (v, t, ges) <- transdec lvl lab d
                                   (v', t', gess) <- withBinding v t $ transdecs ds
@@ -432,13 +430,13 @@ transexp lvl lab absexp =
   in  g absexp
 
 transvar :: TTra.Level -> Maybe TTmp.Label -> TAbs.Var -> SemTr GexpTy
-transvar lvl lab (TAbs.SimpleVar(s, pos)) = do v <- getVenv
-                                               case Map.lookup s v of
-                                                 Nothing -> throwError $ undefinedError pos $ name s
-                                                 Just (VarEntry acc ty _) -> do isptr <- isPointer ty
-                                                                                gexp <- TTra.simpleVar acc lvl isptr
-                                                                                return (gexp, ty)
-                                                 Just _ -> throwError $ notVariable pos $ name s
+transvar lvl _ (TAbs.SimpleVar(s, pos)) = do v <- getVenv
+                                             case Map.lookup s v of
+                                               Nothing -> throwError $ undefinedError pos $ name s
+                                               Just (VarEntry acc ty _) -> do isptr <- isPointer ty
+                                                                              gexp <- TTra.simpleVar acc lvl isptr
+                                                                              return (gexp, ty)
+                                               Just _ -> throwError $ notVariable pos $ name s
 transvar lvl lab (TAbs.FieldVar(v, s, pos)) = do (vgexp, vty) <- transvar lvl lab v
                                                  vty' <- actualTy (TPar.extractPosition v) vty
                                                  case vty' of

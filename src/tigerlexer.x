@@ -1,4 +1,18 @@
 {
+
+{-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE DeriveDataTypeable #-}
+{-# OPTIONS_GHC -fno-warn-unused-matches #-}
+{-# OPTIONS_GHC -fno-warn-unused-binds #-}
+{-# OPTIONS_GHC -fno-warn-unused-imports #-}
+{-# OPTIONS_GHC -fno-warn-missing-signatures #-}
+-- But alex still generates some code that causes the "lazy unlifted bindings"
+-- warning, and old compilers don't know about it so we can't easily turn
+-- it off, so for now we use the sledge hammer:
+{-# OPTIONS_GHC -w #-}
+
+{-# OPTIONS_GHC -funbox-strict-fields #-}
+
 -- Lexer module for Tiger
 -- Part of this source file are drawn from the reference here:
 -- https://github.com/simonmar/alex/blob/master/examples/tiger.x

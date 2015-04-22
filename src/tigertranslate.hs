@@ -311,7 +311,7 @@ ifThen testge thenge =
      return $ Nx $ seqcon [(testge' t f), LABEL t, thenge', LABEL f]
 
 ifThenElse :: Gexp -> Gexp -> Gexp -> Bool -> SemTr Gexp
-ifThenElse testge (Nx thenstm) (Nx elsestm) ispointer =
+ifThenElse testge (Nx thenstm) (Nx elsestm) _ =
   do testge' <- unCx testge
      t <- newLabel
      f <- newLabel

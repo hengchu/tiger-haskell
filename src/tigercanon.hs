@@ -67,7 +67,7 @@ linearize stmtobelinearized =
                   then return (stm0 % stm1, e:el)
                   else do let iseptr = isExpPtr e
                           t <- newTemp iseptr
-                          return (stm0 % MOVE(TEMP t iseptr, e) % stm1, (TEMP t iseptr):el)
+                          return (stm0 % MOVE(TEMP t iseptr, e) % stm1, TEMP t iseptr:el)
           f [] = return (nop, [])
       in do (stm0, el) <- f exps
             return (stm0, build el)
@@ -130,24 +130,24 @@ linearize stmtobelinearized =
 basicblocks :: [Stm] -> Canon ([[Stm]], Tmp.Label)
 basicblocks stms0 =
   do done <- newLabel
-     let blocks ((head@(LABEL _)):tail) blist =
+     let blocks ((blkhead@(LABEL _)):blktail) blist =
            let next ((s@(JUMP _)):rest) thisblock =
                  endblock rest $ s:thisblock
                next ((s@(CJUMP _)):rest) thisblock =
                  endblock rest $ s:thisblock
-               next (stms@((LABEL lab): _)) thisblock =
-                 next ((JUMP(NAME lab, [lab])):stms) thisblock
+               next (stms@(LABEL lab: _)) thisblock =
+                 next (JUMP(NAME lab, [lab]):stms) thisblock
                next (s:rest) thisblock =
                  next rest $ s:thisblock
                next [] thisblock = next [JUMP(NAME done, [done])] thisblock
 
                endblock more thisblock =
-                 blocks more $ (reverse thisblock):blist
-           in next tail [head]
+                 blocks more $ reverse thisblock:blist
+           in next blktail [blkhead]
          blocks [] blist = return $ reverse blist
          blocks stms blist =
            do newlab <- newLabel
-              blocks ((LABEL newlab):stms) blist
+              blocks (LABEL newlab:stms) blist
      blks <- blocks stms0 []
      return (blks, done)
 
@@ -157,8 +157,10 @@ enterblock _ table = table
 
 splitlast :: [a] -> ([a], a)
 splitlast [x] = ([], x)
-splitlast (x:xs) = let (tail, l) = splitlast xs in (x:tail, l)
+splitlast (x:xs) = let (blktail, l) = splitlast xs in (x:blktail, l)
+splitlast _ = error "Compiler error: splitlast."
 
+trace :: Map.Map Tmp.Label [Stm] -> [Stm] -> [[Stm]] -> Canon [Stm]
 trace table b@(LABEL lab0:_) rest =
   let table1 = Map.insert lab0 [] table
   in  case splitlast b of
@@ -180,15 +182,19 @@ trace table b@(LABEL lab0:_) rest =
                                  JUMP(NAME f, [f])]
                     n <- getnext table1 rest
                     return $ most ++ cjump ++ n
-        (most, JUMP _) -> do next <- getnext table1 rest
-                             return $ b ++ next
+        (_, JUMP _) -> do next <- getnext table1 rest
+                          return $ b ++ next
+        _ -> error "Compiler error: trace -> case splitlast b of."
+trace _ _ _ = error "Compiler error: trace."
           
 
+getnext :: Map.Map Tmp.Label [Stm] -> [[Stm]] -> Canon [Stm]
 getnext table (b@(LABEL lab:_):rest) =
   case Map.lookup lab table of
     Just (_:_) -> trace table b rest
     _ -> getnext table rest
-getnext table [] = return []
+getnext _ [] = return []
+getnext _ _ = error "Compiler error: getnext."
 
 tracesched :: ([[Stm]], Tmp.Label) -> Canon [Stm]
 tracesched (blocks, done) =
@@ -198,7 +204,6 @@ tracesched (blocks, done) =
 canonicalize :: Stm -> GenSymLabTmpState -> ([Stm], GenSymLabTmpState)
 canonicalize stm state = let monad = do stms <- linearize stm
                                         blocks <- basicblocks stms
-                                        stm' <- tracesched blocks
-                                        return stm'
-                             result = (runIdentity . (runGSLT state)) monad
+                                        tracesched blocks
+                             result = (runIdentity . runGSLT state) monad
                          in  result

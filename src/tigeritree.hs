@@ -21,7 +21,7 @@ isExpPtr (BINOP _ isptr)   = isptr
 isExpPtr (CVTOP _)         = False
 isExpPtr (MEM _ isptr)     = isptr
 isExpPtr (TEMP _ isptr)    = isptr
-isExpPtr (ESEQ (stm, exp)) = isExpPtr exp
+isExpPtr (ESEQ (_, expr)) = isExpPtr expr
 isExpPtr (NAME _)          = False
 isExpPtr (CONST _ isptr)   = isptr
 isExpPtr (CONSTF _)        = False
@@ -72,59 +72,59 @@ prettyprintstm s = execState (prettyprintstm' s) ""
 prettyprintstm' :: Stm -> State String () 
 prettyprintstm' s =
   let
-    say s = do out <- get
-               put $ out ++ s
-    sayln s = say s >> say "\n"
+    say stuff = do out <- get
+                   put $ out ++ stuff
+    sayln stuff = say stuff >> say "\n"
 
     indent :: Int -> State String ()
     indent 0 = return ()
-    indent i = say " " >> (indent $ i-1)
+    indent i = say " " >> indent (i-1)
 
     stm :: Stm -> Int -> State String ()
-    stm (SEQ(a, b)) d = indent d >> sayln "SEQ(" >> (stm a $ d+1)
-                                 >> sayln " " >> (stm b $ d+1) >> say ")"
+    stm (SEQ(a, b)) d = indent d >> sayln "SEQ(" >> stm a (d+1)
+                                 >> sayln " " >> stm b (d+1) >> say ")"
     stm (LABEL lab) d = if d == 0
-                           then say $ (fst lab ++ ":")
-                           else indent d >> (say $ fst lab)
-    stm (JUMP(e, _)) d = indent d >> sayln "JUMP(" >> (exp e $ d+1) >> say ")"
+                           then say (fst lab ++ ":")
+                           else indent d >> say (fst lab)
+    stm (JUMP(e, _)) d = indent d >> sayln "JUMP(" >> expr e (d+1) >> say ")"
     stm (CJUMP(TEST(r, a, b), t, f)) d = do indent d
                                             sayln "CJUMP("
                                             indent $ d+1
                                             say $ show r
                                             sayln ","
-                                            exp a $ d+1
+                                            expr a $ d+1
                                             sayln ","
-                                            exp b $ d+1
+                                            expr b $ d+1
                                             sayln ","
                                             indent $ d+1
                                             say $ fst t
                                             say ","
                                             say $ fst f
                                             say ")"
-    stm (MOVE(a, b)) d = indent d >> sayln "MOVE(" >> (exp a $ d+1)
-                                  >> sayln "," >> (exp b $ d+1)
+    stm (MOVE(a, b)) d = indent d >> sayln "MOVE(" >> expr a (d+1)
+                                  >> sayln "," >> expr b (d+1)
                                   >> say ")"
-    stm (EXP e) d = indent d >> sayln "EXP(" >> (exp e $ d+1) >> say ")"
+    stm (EXP e) d = indent d >> sayln "EXP(" >> expr e (d+1) >> say ")"
                                                  
 
-    exp :: Exp -> Int -> State String ()
-    exp (BINOP(p, a, b) _) d = indent d >> say "BINOP(" >> (say $ show p) >> sayln ","
-                                      >> (exp a $ d+1) >> sayln "," >> (exp b $ d+1)
+    expr :: Exp -> Int -> State String ()
+    expr (BINOP(p, a, b) _) d = indent d >> say "BINOP(" >> say (show p) >> sayln ","
+                                      >> expr a (d+1) >> sayln "," >> expr b (d+1)
                                       >> say ")"
-    exp (CVTOP(p, e, s1, s2)) d = indent d >> say "CVTOP[" >> (say $ show s1)
-                                           >> say "," >> (say $ show s2) >> say "]("
-                                           >> (say $ show p) >> sayln ","
-                                           >> (exp e $ d+1) >> say ")"
-    exp (MEM(e, s) _) d = indent d >> say "MEM[" >> (say $ show s)
-                                 >> sayln "](" >> (exp e $ d+1) >> say ")"
-    exp (TEMP t _) d = indent d >> say "TEMP " >> (say $ show t)
-    exp (ESEQ(s, e)) d = indent d >> sayln "ESEQ(" >> (stm s $ d+1)
-                                  >> sayln "," >> (exp e $ d+1) >> say ")"
-    exp (NAME lab) d = indent d >> say "NAME " >> (say $ fst lab)
-    exp (CONST i _) d = indent d >> say "CONST " >> (say $ show i)
-    exp (CONSTF r) d = indent d >> say "CONSTF" >> (say $ show r)
-    exp (CALL(e, el) _ _) d = indent d >> sayln "CALL(" >> (exp e $ d+1)
-                                   >> mapM_ (\a -> sayln "," >> (exp a $ d+2)) el
+    expr (CVTOP(p, e, s1, s2)) d = indent d >> say "CVTOP[" >> say (show s1)
+                                           >> say "," >> say (show s2) >> say "]("
+                                           >> say (show p) >> sayln ","
+                                           >> expr e (d+1) >> say ")"
+    expr (MEM(e, stmt) _) d = indent d >> say "MEM[" >> say (show stmt)
+                                 >> sayln "](" >> expr e (d+1) >> say ")"
+    expr (TEMP t _) d = indent d >> say "TEMP " >> say (show t)
+    expr (ESEQ(stmt, e)) d = indent d >> sayln "ESEQ(" >> stm stmt (d+1)
+                                  >> sayln "," >> expr e (d+1) >> say ")"
+    expr (NAME lab) d = indent d >> say "NAME " >> say (fst lab)
+    expr (CONST i _) d = indent d >> say "CONST " >> say (show i)
+    expr (CONSTF r) d = indent d >> say "CONSTF" >> say (show r)
+    expr (CALL(e, el) _ _) d = indent d >> sayln "CALL(" >> expr e (d+1)
+                                   >> mapM_ (\a -> sayln "," >> expr a (d+2)) el
                                    >> say ")"
 
   in

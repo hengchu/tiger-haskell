@@ -135,13 +135,13 @@ instrfmt instr allocation =
      ispseudo (PSEUDO _) = True
      ispseudo _ = False
 
-     map2pseudo (SRC d) srcs dsts = (ispseudo $ fromJust $ Map.lookup (srcs!!d) allocation)
-     map2pseudo (DST d) srcs dsts = (ispseudo $ fromJust $ Map.lookup (dsts!!d) allocation)
+     map2pseudo (SRC d) srcs _ = (ispseudo $ fromJust $ Map.lookup (srcs!!d) allocation)
+     map2pseudo (DST d) _ dsts = (ispseudo $ fromJust $ Map.lookup (dsts!!d) allocation)
      map2pseudo t _ _ = ispseudo $ fromJust $ Map.lookup t allocation
 
      showas as srcs dsts =
-       let showtmp = \t -> showtemp t srcs dsts
-           showadr = \adr -> showaddr1 adr srcs dsts
+       let showtmp t = showtemp t srcs dsts
+           showadr adr = showaddr1 adr srcs dsts
        in case as of
             MOVRR t1 t2 -> if map2pseudo t1 srcs dsts && map2pseudo t2 srcs dsts
                               then error $ "Compiler error: " ++ show t1 ++ ", " ++ show t2 ++ ", " ++ show srcs ++ ", " ++ show dsts

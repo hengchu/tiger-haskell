@@ -5,7 +5,6 @@ import qualified TigerParser as TP
 import qualified TigerGenSymLabTmp as TGSLT
 import qualified TigerCodeGen as CG
 
-import TigerGraph
 import TigerFlow
 import TigerITree
 import TigerFrame
@@ -17,9 +16,7 @@ import TigerColor
 import TigerAssem
 
 import qualified Data.Map as Map
-import qualified Data.ByteString as BString
 
-import Data.List
 import Control.Monad
 import System.Environment
 
@@ -32,19 +29,12 @@ isdata (GCDESCREC _ _) = True
 isproc :: Frag -> Bool
 isproc = not . isdata
 
-trans :: Frag -> TGSLT.GenSymLabTmpState -> (Frame, [Stm], TGSLT.GenSymLabTmpState)
-trans f state = if isdata f
-                   then error "Compiler error: trans received a data frag."
-                   else let (stms, state') = canonicalize (procBody f) state
-                            lab = procName f
-                        in  (procFrame f, stms, state')
-
-transfoldhelper frag (frames, stms1, state) = let (frame, stms2, state') = trans frag state
-                                    in  (frames++[frame], stms1 ++ stms2, state')
-
+codegenfoldhelper :: Stm -> ([Instr], TGSLT.GenSymLabTmpState)
+                         -> ([Instr], TGSLT.GenSymLabTmpState)
 codegenfoldhelper stm (instrs, state) = let (instrs', state') = CG.codegen stm state
                                         in  (instrs ++ instrs', state')
 
+initialcoloring :: Map.Map Temp Register
 initialcoloring = Map.fromList [(Named EAX, EAX)
                                ,(Named EBX, EBX)
                                ,(Named ECX, ECX)
