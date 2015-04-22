@@ -88,15 +88,15 @@ isPointer (Record _) = return True
 
 
 withBinding :: Venv -> Tenv -> SemTr a -> SemTr a
-withBinding v t checker = do 
-  ov <- getVenv
-  ot <- getTenv
-  putVenv v
-  putTenv t
-  a <- checker
-  putVenv ov
-  putTenv ot
-  return a
+withBinding v t checker = 
+  do ov <- getVenv
+     ot <- getTenv
+     putVenv v
+     putTenv t
+     a <- checker
+     putVenv ov
+     putTenv ot
+     return a
 
 findFirstDiffInLists :: Eq a => [a] -> [a] -> Maybe Int
 findFirstDiffInLists la lb | la == lb  = Nothing
@@ -104,6 +104,21 @@ findFirstDiffInLists la lb | la == lb  = Nothing
                                                             " same length in findFirstDiffInLists."
                            | otherwise = let equalities = zipWith (==) la lb
                                          in  (False) `elemIndex` equalities
+
+zipWithM5 :: (Monad m) => (a -> b -> c -> d -> e -> m g) -> [a] -> [b] -> [c] -> [d] -> [e] -> m [g]
+zipWithM5 f (a:args1) (b:args2) (c:args3) (d:args4) (e:args5)= do
+  g <- f a b c d e
+  gs <- zipWithM5 f args1 args2 args3 args4 args5
+  return $ g:gs
+
+zipWithM5 _ [] [] [] [] [] = return []
+zipWithM5 _ _ _ _ _ _ = error $ "zipWithM5: Args 1..5 must have the same length."
+
+nestedZip :: [[a]] -> [[b]] -> [[(a, b)]]
+nestedZip as bs = zipWith zip as bs
+
+insertList :: (Ord k) => Map.Map k v -> [k] -> [v] -> Map.Map k v
+insertList m keys values = foldr (uncurry Map.insert) m (zip keys values)
 
 sym2ty :: TSym.Symbol -> TLex.AlexPosn -> SemTr Ty
 sym2ty sym pos = do 
@@ -125,77 +140,53 @@ addfunctiontobinding sym lvl lab params result = do
   let v' = Map.insert sym fentry v
   putVenv v'
 
-{-
-zipWithM4 :: Monad m => (a -> b -> c -> d -> m e) -> [a] -> [b] -> [c] -> [d] -> m [e]
-zipWithM4 f (a:args1) (b:args2) (c:args3) (d:args4) = do
-  e <- f a b c d
-  es <- zipWithM4 f args1 args2 args3 args4
-  return $ e:es
-
-zipWithM4 _ [] [] [] [] = return []
-zipWithM4 _ _ _ _ _ = error "zipWithM4: Args 1..4 must have the same length."
--}
-
-zipWithM5 :: (Show a, Show b, Show c, Show d, Show e, Monad m) => (a -> b -> c -> d -> e -> m g) -> [a] -> [b] -> [c] -> [d] -> [e] -> m [g]
-zipWithM5 f (a:args1) (b:args2) (c:args3) (d:args4) (e:args5)= do
-  g <- f a b c d e
-  gs <- zipWithM5 f args1 args2 args3 args4 args5
-  return $ g:gs
-
-zipWithM5 _ [] [] [] [] [] = return []
-zipWithM5 _ _ _ _ _ _ = error $ "zipWithM5: Args 1..5 must have the same length." {- ++ show a ++ "\n" 
-                                                                                    ++ show b ++ "\n"
-                                                                                    ++ show c ++ "\n" 
-                                                                                    ++ show d ++ "\n"
-                                                                                    ++ show e -}
-
-nestedZip :: [[a]] -> [[b]] -> [[(a, b)]]
-nestedZip as bs = zipWith zip as bs
-
-zipTypePos :: [[TSym.Symbol]] -> [[TLex.AlexPosn]] -> [[(TSym.Symbol, TLex.AlexPosn)]]
-zipTypePos = nestedZip
-
-
 transdec :: TTra.Level -> Maybe TTmp.Label -> TAbs.Dec -> SemTr (Venv, Tenv, [TTra.Gexp])
 transdec lvl lab dec =
   let g (TAbs.FunctionDec fdecs) = let fnamesyms    = map TAbs.fundecName fdecs
-                                       ffieldnamess = map (map TAbs.tfieldName) $ map TAbs.fundecParams fdecs
-                                       ffieldtypess = map (map TAbs.tfieldTyp)  $ map TAbs.fundecParams fdecs
-                                       ffieldposess = map (map TAbs.tfieldPos) $ map TAbs.fundecParams fdecs
+                                       fparams      = map TAbs.fundecParams fdecs
+
+                                       ffieldnamess = fmap (map TAbs.tfieldName) fparams
+                                       ffieldtypess = fmap (map TAbs.tfieldTyp)  fparams
+                                       ffieldposess = fmap (map TAbs.tfieldPos)  fparams
+
                                        fbodyexps = map TAbs.fundecBody fdecs
-                                       ftypes = map TAbs.fundecResult fdecs
-                                   in  do fparamtyss <- mapM (mapM (uncurry sym2ty)) (zipTypePos ffieldtypess ffieldposess)
-                                          (flevels, formalsWithOffsetss) <- liftM unzip $ mapM (TTra.newLevel lvl) fparamtyss
+                                       ftypes    = map TAbs.fundecResult fdecs
+
+                                   in  do fparamtyss <- mapM (mapM (uncurry sym2ty)) (nestedZip ffieldtypess ffieldposess)
+                                          (flevels, formalsWithOffsetss) <- fmap unzip $ mapM (TTra.newLevel lvl) fparamtyss
                                           fresulttys <- mapM ftype2ty ftypes
                                           flabs <- mapM (\_ -> newLabel) fdecs
                                           let fentries = zipWith4 FunEntry flevels flabs formalsWithOffsetss fresulttys
                                           v <- getVenv
                                           t <- getTenv
-                                          let v' = foldr (uncurry Map.insert) v (zip fnamesyms fentries)
+                                          let v' = insertList v fnamesyms fentries
                                           _ <- withBinding v' t $ zipWithM5 (checkbody lab) flevels flabs fresulttys 
-                                                                            (zip3 ffieldnamess fparamtyss $ liftM (map snd) formalsWithOffsetss)
+                                                                            (zip3 ffieldnamess fparamtyss $ fmap (map snd) formalsWithOffsetss)
                                                                             fbodyexps
                                           return (v', t, [])
         where ftype2ty (Just (s, pos)) = sym2ty s pos
               ftype2ty Nothing         = return Unit
+
               checkbody newlab newlvl funlab decty (paramsyms, paramtys, paramaccesses) bodyexp = 
                 do let varentries = zipWith3 VarEntry paramaccesses paramtys $ take (length paramsyms) $ repeat False
                    v <- getVenv
                    t <- getTenv
-                   let v' = foldr (uncurry Map.insert) v (zip paramsyms varentries)
+                   let v' = insertList v paramsyms varentries
                    (gexp, bodyty) <- withBinding v' t $ transexp newlvl newlab bodyexp
-                   bodyty' <- actualTy (TPar.extractPosition bodyexp) bodyty
-                   decty' <- actualTy (TPar.extractPosition bodyexp) decty
+                   let bodyposition = TPar.extractPosition bodyexp
+                   bodyty' <- actualTy bodyposition bodyty
+                   decty' <- actualTy bodyposition decty
                    if bodyty' == decty'
-                      then do returnsptr <- isPointer bodyty'
-                              TTra.createProcFrag funlab newlvl gexp returnsptr
+                      then do retvalIsptr <- isPointer bodyty'
+                              TTra.createProcFrag funlab newlvl gexp retvalIsptr
                       else throwError $ typeMisMatchError (TPar.extractPosition bodyexp) (show bodyty) (show decty)
+
       g (TAbs.VarDec {TAbs.varDecVar=vardec, TAbs.varDecTyp=typandpos, TAbs.varDecInit=initexp, TAbs.varDecPos=pos}) =
         do (initgexp, initty) <- transexp lvl lab initexp
            let varnamesym = TAbs.vardecName vardec
-           isvarptr <- isPointer initty
-           varaccess <- liftIO $ TTra.allocInFrame isvarptr lvl
-           var <- TTra.simpleVar varaccess lvl isvarptr
+           isinitptr <- isPointer initty
+           varaccess <- liftIO $ TTra.allocInFrame isinitptr lvl
+           var <- TTra.simpleVar varaccess lvl isinitptr
            assigngexp <- TTra.assign var initgexp
            case typandpos of
              Just (typsym, typpos) -> do typty <- sym2ty typsym typpos
@@ -220,8 +211,8 @@ transdec lvl lab dec =
            let poses = map TAbs.typedecPos decs
            mapM_ (uncurry (checkname t)) (zip poses names)
            refNothings <- mapM (\_ -> liftIO $ newIORef Nothing) decs
-           let nametypes = zipWith (\sym ref -> Name (sym, ref)) names refNothings
-           let t' = foldr (uncurry Map.insert) t (zip names nametypes)
+           let nametypes = zipWith (curry Name) names refNothings
+           let t' = insertList t names nametypes
            let absyntys = map TAbs.typedecTy decs
            tys <- mapM (withBinding v t' . transty) absyntys
            mapM_ (\(ref, ty) -> liftIO $ writeIORef ref $ Just ty) (zip refNothings tys)
@@ -250,9 +241,9 @@ transexp lvl lab absexp =
         do v <- getVenv
            case Map.lookup funcsym v of
              Just (FunEntry {funLevel=funlvl
-                                ,funLabel=funlab
-                                ,funFormals=funformals
-                                ,funResult=funresult}) ->
+                            ,funLabel=funlab
+                            ,funFormals=funformals
+                            ,funResult=funresult}) ->
                do (ges, tys) <- liftM unzip $ mapM g funcargs
                   let argposes = map TPar.extractPosition funcargs
                   argtys <- mapM (uncurry actualTy) (zip argposes tys)
